@@ -6,17 +6,19 @@
 
 ## 安装
 
-在 Codex 中使用内置安装器：
-
-```text
-$skill-installer 从 SteveTanSaMa/Codex-Agent-Tree 安装根目录 Skill，path 为 .，name 为 codex-agent-tree。
-```
-
-也可克隆到 Skill 目录；目标目录应不存在：
+克隆到 Skill 目录；目标目录应不存在：
 
 ```sh
 git clone https://github.com/SteveTanSaMa/Codex-Agent-Tree.git "${CODEX_HOME:-$HOME/.codex}/skills/codex-agent-tree"
 ```
+
+也可在 Codex 中使用内置安装器的下载方式：
+
+```text
+$skill-installer 从 SteveTanSaMa/Codex-Agent-Tree 安装根目录 Skill，path 为 .，name 为 codex-agent-tree，method 使用 download。
+```
+
+根目录安装不使用安装器的 Git 稀疏检出方式，它可能只复制根文件而遗漏源码子目录。遇到 Python 证书链错误时，可使用上面的普通 `git clone`；无需关闭证书校验。
 
 下一轮对话使用 `$codex-agent-tree`。Skill 采用 `SKILL.md` 与辅助脚本的官方目录形式，见 [OpenAI Skills 文档](https://learn.chatgpt.com/docs/build-skills)。仓库根目录即完整 Skill，不需要另外安装 MCP Server。
 
