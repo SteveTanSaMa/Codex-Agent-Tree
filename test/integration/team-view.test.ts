@@ -6,6 +6,7 @@ import { Coordinator } from "../../src/coordinator/coordinator.ts";
 import { ControlledRuntime } from "../fixtures/controlled-runtime.ts";
 
 const limits = {
+  tokenPolicy: "enforce" as const,
   tokens: 10000,
   maxDepth: 2,
   maxAgents: 4,

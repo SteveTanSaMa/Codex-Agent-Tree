@@ -255,6 +255,9 @@ async function serve() {
               turnReservation: 5000,
             };
             const limits = {
+              tokenPolicy: (p.tokenPolicy ?? "observe") as
+                "observe" | "enforce",
+              maxTotalTurns: Number(p.maxTotalTurns ?? 100),
               tokens: Number(p.tokens ?? defaults.tokens),
               maxDepth: Number(p.maxDepth ?? defaults.maxDepth),
               maxAgents: Number(p.maxAgents ?? defaults.maxAgents),
@@ -424,6 +427,8 @@ try {
         name: flag("name", "Root"),
         task: text(flag("task"), "task"),
         requestKey: flag("key", randomUUID()),
+        tokenPolicy: flag("token-policy"),
+        maxTotalTurns: flag("max-total-turns"),
         tokens: flag("tokens"),
         maxDepth: flag("max-depth"),
         maxAgents: flag("max-agents"),
@@ -621,7 +626,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init, start, serve, root --task TEXT, tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init, start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

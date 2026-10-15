@@ -11,7 +11,7 @@ Codex 对话 → Skill CLI → 本地认证 socket → Coordinator ↔ 业务 SQ
 
 稳定业务 `agent_id` 独立于 `thread_id`；绑定记录递增 `binding_generation`，连接另有 generation。Agent 是身份，Thread 是上下文，Turn 是调度单位。管理关系是树，通信可跨层；另有轻量 Task 依赖板，采用显式完成、CAS 和幂等操作；依赖就绪不自动派发模型。
 
-选择维护这层 Coordinator，是因为身份、授权、预算转移、控制 fence、消息消费与派发意图需要共享业务事务和 ownership。候选上层编排器也能完成 nominal 递归，保守 unknown guard 可小幅补齐；最终取舍在这些新增状态的事务与恢复接入成本。不把未测试项当作候选失败，不宣称成本全局最优。若未来已有项目覆盖这些语义，应重评薄扩展。
+选择维护这层 Coordinator，是因为身份、授权、执行配额、可选预算转移、控制 fence、消息消费与派发意图需要共享业务事务和 ownership。候选上层编排器也能完成 nominal 递归，保守 unknown guard 可小幅补齐；最终取舍在这些新增状态的事务与恢复接入成本。不把未测试项当作候选失败，不宣称成本全局最优。若未来已有项目覆盖这些语义，应重评薄扩展。
 
 ## 唤醒与恢复
 
@@ -21,7 +21,7 @@ Codex 对话 → Skill CLI → 本地认证 socket → Coordinator ↔ 业务 SQ
 
 ## 成本、追踪与人工介入
 
-- 每棵树有 root 预算池，子预算从父节点转移；限制深度、累计 Agent、并行 Turn、单节点 Turn 和预留。累计 usage 去重核算；部分用量不等于最终结算，未知责任保留预留并阻止新消费。超预算时缩减任务、汇总已有结果或报告阻塞，不绕过预算另建树。
+- 每棵树始终限制深度、累计 Agent、并行 Turn、单节点及整树累计 Turn。新树默认 observe：token 去重核算并按阈值告警，不要求子分配，也不因未知用量阻断其他工作；未知执行仍占据原节点及并发槽，不自动重放。显式 enforce 才使用 root 池、父子预算转移与未知用量准入门槛。旧树保留 enforce。达到用户选定的硬限制后汇总或报告阻塞，不另建树绕过。
 - attempt 保存 Agent、Thread、Turn、父 Turn、binding generation、输入摘要和结果；spawn/消息/控制/工具调用有结构化事件。通过 tree/status/events/native-history 定位委派与执行故障。
 - 人工暂停/恢复可作用子树或单节点；cancel/terminate 请求中断并保留审计。模型不能解除人工 fence、伪造身份或结算用量。审批当前安全拒绝，没有交互审批队列。
 - 共享 daemon 仅用于同一凭据域。已知多凭据或不同信任配置时，设计阶段就应按域分片；alpha 不提供多域编排。

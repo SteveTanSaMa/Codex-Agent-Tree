@@ -37,6 +37,8 @@ export interface Actor {
   turnId: string;
 }
 export interface TreeLimits {
+  tokenPolicy?: "observe" | "enforce";
+  maxTotalTurns?: number;
   tokens: number;
   maxDepth: number;
   maxAgents: number;
@@ -147,7 +149,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5].includes(
+        [1, 2, 3, 4, 5, 6].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -200,7 +202,7 @@ export class Store {
           );
         }
       }
-      this.run("UPDATE schema_version SET version=5");
+      this.run("UPDATE schema_version SET version=6");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -302,7 +304,13 @@ export class Store {
   limits(treeId: string): TreeLimits {
     const t = this.one("SELECT limits_json FROM trees WHERE id=?", treeId);
     requireCondition(t, "NOT_FOUND", "Tree not found");
-    return JSON.parse(String(t.limits_json)) as TreeLimits;
+    const limits = JSON.parse(String(t.limits_json)) as TreeLimits;
+    return {
+      ...limits,
+      tokenPolicy: limits.tokenPolicy ?? "enforce",
+      maxTotalTurns:
+        limits.maxTotalTurns ?? limits.maxAgents * limits.maxTurnsPerAgent,
+    };
   }
   binding(id: string): Binding | undefined {
     return this.one(
@@ -344,10 +352,28 @@ export class Store {
     limits: TreeLimits,
     requestKey: string = randomUUID(),
   ): Agent {
-    for (const [key, value] of Object.entries(limits))
-      integer(value, key, key === "maxDepth" ? 0 : 1);
+    const policy = limits.tokenPolicy ?? "observe";
     requireCondition(
-      limits.turnReservation <= limits.tokens,
+      policy === "observe" || policy === "enforce",
+      "INVALID_INPUT",
+      "Invalid token policy",
+    );
+    for (const key of [
+      "tokens",
+      "maxDepth",
+      "maxAgents",
+      "maxConcurrentTurns",
+      "maxTurnsPerAgent",
+      "turnReservation",
+    ] as const)
+      integer(limits[key], key, key === "maxDepth" ? 0 : 1);
+    const maxTotalTurns = integer(
+      limits.maxTotalTurns ?? 100,
+      "maxTotalTurns",
+      1,
+    );
+    requireCondition(
+      policy === "observe" || limits.turnReservation <= limits.tokens,
       "INVALID_INPUT",
       "Turn reservation exceeds total budget",
     );
@@ -370,7 +396,7 @@ export class Store {
       this.run(
         "INSERT INTO trees VALUES(?,?,?)",
         treeId,
-        JSON.stringify(limits),
+        JSON.stringify({ ...limits, tokenPolicy: policy, maxTotalTurns }),
         now(),
       );
       const root = this.insertAgent(
@@ -452,9 +478,20 @@ export class Store {
       treeId,
     ).map((a) => String(a.id));
     const tokens = this.limits(treeId).tokens;
+    const observedTokens = Number(
+      this.one(
+        "SELECT COALESCE(SUM(MAX(COALESCE(t.observed,0),COALESCE(c.charged,0))),0) AS n FROM turn_attempts t JOIN agents a ON a.id=t.agent_id LEFT JOIN attempt_accounting c ON c.attempt_id=t.id WHERE a.tree_id=?",
+        treeId,
+      )?.n,
+    );
     const spent = Number(totals.spent ?? 0);
     const reserved = Number(totals.reserved ?? 0);
     return {
+      tokenPolicy: this.limits(treeId).tokenPolicy!,
+      enforced: this.limits(treeId).tokenPolicy === "enforce",
+      warningThresholdTokens: tokens,
+      observedTokens,
+      warningExceeded: observedTokens > tokens,
       tokens,
       spent,
       reserved,
@@ -463,8 +500,28 @@ export class Store {
       unknownUsageAttempts: unknown,
     };
   }
+  executionStatus(treeId: string) {
+    const limits = this.limits(treeId);
+    const usedTurns = Number(
+      this.one(
+        "SELECT COALESCE(SUM(turns),0) AS n FROM agents WHERE tree_id=?",
+        treeId,
+      )?.n,
+    );
+    return {
+      maxTotalTurns: limits.maxTotalTurns!,
+      usedTurns,
+      remainingTurns: Math.max(0, limits.maxTotalTurns! - usedTurns),
+      maxAgents: limits.maxAgents,
+      createdAgents: this.agents(treeId).length,
+      maxConcurrentTurns: limits.maxConcurrentTurns,
+      maxDepth: limits.maxDepth,
+      maxTurnsPerAgent: limits.maxTurnsPerAgent,
+    };
+  }
   private admitGlobal(agent: Agent, reservation: number) {
     const pool = this.budgetStatus(agent.tree_id);
+    if (!pool.enforced) return;
     requireCondition(
       !pool.unknownUsageAttempts.length,
       "STATE_BLOCKED",
@@ -515,9 +572,9 @@ export class Store {
   spawn(
     actor: Actor,
     key: string,
-    input: { name: string; role: string; task: string; tokens: number },
+    input: { name: string; role: string; task: string; tokens?: number },
   ): Agent {
-    integer(input.tokens, "child tokens", 1);
+    if (input.tokens !== undefined) integer(input.tokens, "child tokens", 1);
     return this.transaction(() => {
       const parent = this.actor(actor);
       const prior = this.operation(parent, key, "spawn", input);
@@ -532,26 +589,35 @@ export class Store {
         "Depth or lifetime Agent limit reached",
       );
       requireCondition(
-        parent.capacity - parent.spent - parent.reserved >= input.tokens,
-        "BUDGET_EXHAUSTED",
-        "Parent cannot allocate child budget",
+        this.executionStatus(parent.tree_id).remainingTurns > 0,
+        "STATE_BLOCKED",
+        "Tree lifetime Turn limit reached",
       );
-      requireCondition(
-        input.tokens >= limits.turnReservation,
-        "BUDGET_EXHAUSTED",
-        "Child budget cannot admit one Turn",
-      );
-      this.run(
-        "UPDATE agents SET capacity=capacity-? WHERE id=?",
-        input.tokens,
-        parent.id,
-      );
+      const allocation = input.tokens ?? 0;
+      if (limits.tokenPolicy === "enforce") {
+        requireCondition(
+          input.tokens !== undefined &&
+            parent.capacity - parent.spent - parent.reserved >= allocation,
+          "BUDGET_EXHAUSTED",
+          "Parent cannot allocate child budget",
+        );
+        requireCondition(
+          allocation >= limits.turnReservation,
+          "BUDGET_EXHAUSTED",
+          "Child budget cannot admit one Turn",
+        );
+        this.run(
+          "UPDATE agents SET capacity=capacity-? WHERE id=?",
+          allocation,
+          parent.id,
+        );
+      }
       const child = this.insertAgent(
         parent,
         input.name,
         input.role,
         input.task,
-        input.tokens,
+        limits.tokenPolicy === "enforce" ? allocation : 0,
         parent.tree_id,
       );
       const source = this.one(
@@ -803,9 +869,10 @@ export class Store {
       const limits = this.limits(agent.tree_id);
       this.admitGlobal(agent, limits.turnReservation);
       requireCondition(
-        agent.turns < limits.maxTurnsPerAgent,
-        "BUDGET_EXHAUSTED",
-        "Turn count limit reached",
+        agent.turns < limits.maxTurnsPerAgent &&
+          this.executionStatus(agent.tree_id).remainingTurns > 0,
+        "STATE_BLOCKED",
+        "Agent or tree lifetime Turn limit reached",
       );
       const active = Number(
         this.one(
@@ -819,7 +886,9 @@ export class Store {
         "Concurrent Turn limit reached",
       );
       requireCondition(
-        agent.capacity - agent.spent - agent.reserved >= limits.turnReservation,
+        limits.tokenPolicy === "observe" ||
+          agent.capacity - agent.spent - agent.reserved >=
+            limits.turnReservation,
         "BUDGET_EXHAUSTED",
         "Insufficient available Turn budget",
       );
@@ -1179,6 +1248,7 @@ export class Store {
   private releaseTerminated(agentId: string): void {
     const agent = this.agent(agentId);
     if (
+      this.limits(agent.tree_id).tokenPolicy === "observe" ||
       agent.desired !== "terminated" ||
       !agent.parent_id ||
       agent.reserved > 0 ||
@@ -1444,11 +1514,15 @@ export class Store {
         id,
       );
       const pool = this.budgetStatus(agent.tree_id);
-      if (
-        pool.excessLiabilityTokens > 0 &&
-        previousPool.excessLiabilityTokens === 0
-      )
-        this.event(agent, "budget.tree_overcommitted", pool, id);
+      if (pool.enforced) {
+        if (
+          pool.excessLiabilityTokens > 0 &&
+          previousPool.excessLiabilityTokens === 0
+        )
+          this.event(agent, "budget.tree_overcommitted", pool, id);
+      } else if (pool.warningExceeded && !previousPool.warningExceeded) {
+        this.event(agent, "usage.threshold_exceeded", pool, id);
+      }
     });
   }
   accounting(id: string) {

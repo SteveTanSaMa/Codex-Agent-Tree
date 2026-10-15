@@ -51,13 +51,26 @@ node "$SKILL_DIR/scripts/cat.mjs" wait --target ROOT_ID --after CURSOR --timeout
 
 Events already committed after a cursor are returned immediately; unrelated tree commits do not finish a wait or reset its deadline. Cursors persist across Coordinator restart. A cursor ahead of the current database is rejected; read a fresh view after restoring a backup. Detailed payloads remain available through `events`. Task edits and waiting do not trigger model calls on their own.
 
-## Budgets
+## Execution limits and token policy
 
-Root defaults: `--tokens 200000 --max-depth 2 --max-agents 16 --concurrent 3 --max-turns 20 --reserve 5000`. Agent limits count lifetime accepted Agents; depth starts at zero. Child allocation transfers from the parent's pool. These are per-tree admission/accounting controls, not an account budget or a hard cap on an executing black-box Turn.
+Root defaults: `--max-depth 2 --max-agents 16 --concurrent 3 --max-turns 20 --max-total-turns 100`. These are hard admission limits in both policies. Depth starts at zero; Agent count is lifetime accepted members, including terminated ones. `--max-turns` applies per Agent; `--max-total-turns` counts all prepared Turns in the tree, including later failures, interruptions and cancelled unsent attempts. Counts survive restart; cancellation never refunds a Turn. A prepared Turn already owns its slot and can finish dispatch when the limit is reached. Limits do not stop a currently executing Turn mid-flight.
 
-When admission fails, inspect remaining budget, reservations, depth/count/Turn limits; reduce delegation, synthesize available results, or report blocked state. Do not create another root to bypass the pool. Failed/interrupted Turns may have partial usage: liability remains until final usage is proven. Cumulative native observations are deduplicated; actual overruns remain visible. Native totals include cached input: repeated Task tool calls can consume substantially more cumulative tokens than a short message-only workflow. The three-node/two-task acceptance case explicitly uses a 600000-token pool (B: 300000, C: 120000 from B); this is not a price estimate or a guarantee for arbitrary prompts. Plan the pool before root creation; a budget-blocked team must not be silently replaced to bypass its limits.
+`status` and `view` expose `executionLimits` with used/remaining tree Turns and structural bounds. `tree-turn-limit` means no further Turns or new children can be admitted. Inspect the requested result and queued work, then report the limit; do not create another root or clear a human fence to evade it.
 
-Keep allocation (`Agent.capacity`, transferred on delegation), reservation/liability (`reserved`), and observed/charged usage (`attempt.observed`, `accounting.charged`, Agent `spent`) distinct. `budget.availableTokens` is the tree's arithmetic unencumbered balance; other gates may still block admission. `budget.excessLiabilityTokens` reports positive `spent + reserved - tokens`, including retained liability; it is not a provider invoice. When native usage changes the tree from within budget to excess liability, `budget.tree_overcommitted` persists the warning. Duplicate usage does not duplicate the threshold warning. This visibility does not stop an already executing Turn at a hard limit.
+New trees default to `--token-policy observe`. `--tokens 200000` is a usage warning threshold; `--reserve 5000` remains an accounting estimate, not an admission gate. Child `tokens` is optional and does not transfer capacity in this mode. Legacy token hints are accepted but ignored for allocation; child `capacity` remains zero. Token overruns and another Agent's unsettled usage do not block new work. Unknown execution still blocks its own Agent, occupies concurrency, and is never automatically replayed.
+
+```sh
+# Default: structure and Turn counts constrain execution; token usage is observed.
+node "$SKILL_DIR/scripts/cat.mjs" root --name Lead --key review-001 --max-agents 3 --max-total-turns 12 --task-file /absolute/path/task.txt
+# Optional: token admission enforced in addition to the same structural limits.
+node "$SKILL_DIR/scripts/cat.mjs" root --name Lead --key budgeted-001 --token-policy enforce --tokens 600000 --task-file /absolute/path/task.txt
+```
+
+In `enforce`, child allocation transfers from the parent, each Turn reserves budget before dispatch, and unresolved terminal usage blocks new consumption. Allocation (`Agent.capacity`), reservation/liability (`reserved`) and charged usage (`spent`, `accounting.charged`) remain distinct. This is the prior budget protocol, not a hard runtime or provider-billing cap. Choose policy at root creation; model tools cannot change it or the execution limits. Existing trees without a policy retain `enforce`, with their implicit tree Turn bound derived from maxAgents × maxTurnsPerAgent.
+
+Both policies preserve native observations and deduplicate cumulative usage. `budget.tokenPolicy` / `enforced` identify whether arithmetic balances actually gate admission. `observedTokens` sums observed/charged usage; it includes cached input. `warningExceeded` compares it to `warningThresholdTokens`, with `usage.threshold_exceeded` emitted at the first native crossing in observe mode; reservations alone do not trigger that alert. `availableTokens` and `excessLiabilityTokens` retain the legacy arithmetic, including retained liability; in observe mode they are diagnostic, not remaining execution allowance. Enforce mode retains `budget.tree_overcommitted` for an excess-liability crossing. Actual costs cannot be inferred from these totals alone.
+
+When a hard limit blocks progress, reduce delegation, synthesize available results or report blocked work. Do not invent final usage or discard unknown state. Historical usage and human settlement records remain available in both policies.
 
 ## Human control
 
@@ -72,9 +85,9 @@ Keep allocation (`Agent.capacity`, transferred on delegation), reservation/liabi
 
 An interruption request is not confirmation of stopping. Only confirmed unconsumed child capacity is refunded. Models cannot clear human fences or call settlement/quarantine operator endpoints. Approvals are declined and logged; no interactive approval queue is included.
 
-## Upgrading from alpha.2
+## Upgrading from alpha.2 / alpha.3
 
-Alpha.3 migrates the business database from schema 4 to 5, preserving Agents, bindings, messages and budget. This is one-way; alpha.2 refuses schema 5. Stop the Coordinator before replacing source, back up the stopped state directory including any SQLite sidecars, and keep the dedicated runtime home. Do not run old/new Coordinators together or overwrite an active installation. Restart with the existing state so native history is reconciled. Rollback requires the matching pre-upgrade backup and careful reconciliation of any native work executed since it was taken.
+Alpha.4 migrates the business database to schema 6, preserving Agents, bindings, messages and budget. This is one-way; older versions refuse schema 6. Existing trees keep their original enforce policy; only new trees default to observe. Stop the Coordinator before replacing source, back up the stopped state directory including any SQLite sidecars, and keep the dedicated runtime home. Do not run old/new Coordinators together or overwrite an active installation. Restart with the existing state so native history is reconciled. Rollback requires the matching pre-upgrade backup and careful reconciliation of any native work executed since it was taken.
 
 ## Recovery and shutdown
 

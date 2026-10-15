@@ -30,10 +30,10 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 
 Translate the user's objective into a task containing the relevant input, expected output, child roles, and completion criteria. Include: delegate through `agent_spawn`; end the initial Turn after delegation; children report to their parent with `agent_send`; recipients explicitly `agent_ack` delivered messages and synthesize the actual reports. Managed Agents receive these tools automatically; they are not tools exposed in the operator's current chat.
 
-For a modest two-level team, use the default 200000-token root pool; a child might receive 80000 tokens and its child 30000. Child allocations transfer from the parent's pool. Keep the tree as small as the task needs. The pool is admission/accounting control, not a provider billing cap.
+New teams use token observation by default: do not plan token transfers or require child `tokens`. Set structural limits suitable for the task: depth, lifetime Agent count, concurrent Turns, per-Agent Turns and total tree Turns. Defaults are depth 2, 16 Agents, 3 concurrent Turns, 20 Turns per Agent and 100 total Turns. A small recursive team usually needs much less; these are ceilings, not targets. Lifetime counts include finished members and failed/interrupted/prepared Turns and survive restart.
 
 ```sh
-node "$SKILL_DIR/scripts/cat.mjs" root --state "$STATE" --name Lead --key UNIQUE_TASK_KEY --task-file /absolute/path/task.txt --max-depth 2 --max-agents 3 --concurrent 2 --max-turns 6
+node "$SKILL_DIR/scripts/cat.mjs" root --state "$STATE" --name Lead --key UNIQUE_TASK_KEY --task-file /absolute/path/task.txt --max-depth 2 --max-agents 3 --concurrent 2 --max-turns 6 --max-total-turns 12
 node "$SKILL_DIR/scripts/cat.mjs" tree --state "$STATE"
 node "$SKILL_DIR/scripts/cat.mjs" status --state "$STATE" --target ROOT_ID
 ```
@@ -44,7 +44,7 @@ Keep the returned stable Root ID and request key. Retry an uncertain submission 
 
 ## Explicit tasks and dependencies
 
-Task tools add model round trips and repeated context usage, including cached input in native totals. Plan a sufficient pool before creating the team: the three-node, two-task acceptance workflow uses `--tokens 600000`, with 300000 allocated to B and 120000 from B to C. The CLI default stays 200000; do not increase or bypass a live pool to force completion.
+Token totals include cached input and repeated tool context; they are not a bill. By default `--tokens` is a warning threshold (200000), not an execution gate. Optional `--token-policy enforce --tokens N` enables the legacy admission budget and requires child allocations; read [operations](references/operations.md) when explicitly requested. Existing trees retain their previous policy. Never change policy or create another root to evade the user's chosen limits.
 
 For delegated work with completion criteria, ask the managed Root to create tasks using `agent_task_create`, passing a stable `requestKey`, `subject`, `description`, and optional `blockedBy` task IDs. For example, create a calculation task and a verification task blocked by that calculation. Include task IDs and expected outputs in child assignments.
 
@@ -67,7 +67,7 @@ Waiting is for the operator; do not instruct managed Agents to hold their native
 
 If a Turn is `unknown`, quarantined, failed, or has unsettled cost, inspect `status`, `events`, and `native-history`. Do not replay work, clear a quarantine, or invent a final usage amount to make progress. Read [operations](references/operations.md) for recovery and accounting.
 
-A `processed` receipt confirms consumption in a successful Turn, not completion of a delegated task. If a message is `rejected`, report its ID and the `message.delivery_rejected` reason from `events`; later messages may still run. Include any positive `budget.excessLiabilityTokens` in the result as a budget warning, without describing it as exact provider billing.
+A `processed` receipt confirms consumption in a successful Turn, not completion of a delegated task. If a message is `rejected`, report its ID and the `message.delivery_rejected` reason from `events`; later messages may still run. Report `budget.warningExceeded` with `observedTokens` and `warningThresholdTokens`. Explain retained unknown usage separately. In enforce mode, also report positive `excessLiabilityTokens`; none of these numbers is exact provider billing.
 
 ## Operate an existing team
 

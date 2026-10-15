@@ -7,6 +7,7 @@ import { Store, type Actor, type TreeLimits } from "../../src/storage/store.ts";
 import { AgentTreeError } from "../../src/core/errors.ts";
 
 const limits: TreeLimits = {
+  tokenPolicy: "enforce" as const,
   tokens: 10000,
   maxDepth: 2,
   maxAgents: 3,

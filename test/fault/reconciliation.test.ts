@@ -301,11 +301,15 @@ test("a completion during history hydration cannot be overwritten by the stale i
     await f.close();
   }
 });
-function fixture(state: "starting" | "running" = "starting") {
+function fixture(
+  state: "starting" | "running" = "starting",
+  tokenPolicy: "observe" | "enforce" = "enforce",
+) {
   const dir = mkdtempSync(join(tmpdir(), "cat-reconcile-"));
   const path = join(dir, "business.sqlite");
   const store = new Store(path);
   const root = store.createRoot("A", "original task", {
+    tokenPolicy,
     tokens: 1000,
     maxDepth: 2,
     maxAgents: 3,
@@ -467,6 +471,7 @@ test("event-driven scheduler wakes queued input after completion without a perio
   try {
     await coordinator.start();
     const root = coordinator.createRoot("A", "initial task", {
+      tokenPolicy: "enforce",
       tokens: 1000,
       maxDepth: 1,
       maxAgents: 2,
@@ -531,6 +536,7 @@ test("mock initialization crash: unsent prepared work rebinds an empty context w
   const dir = mkdtempSync(join(tmpdir(), "cat-empty-recovery-"));
   const store = new Store(join(dir, "business.sqlite"));
   const root = store.createRoot("A", "initial work", {
+    tokenPolicy: "enforce",
     tokens: 1000,
     maxDepth: 1,
     maxAgents: 2,
@@ -578,6 +584,7 @@ test("a late usage event unblocks queued work after an unknown-cost completion w
   try {
     await coordinator.start();
     const root = coordinator.createRoot("A", "initial task", {
+      tokenPolicy: "enforce",
       tokens: 1000,
       maxDepth: 1,
       maxAgents: 2,
@@ -735,6 +742,7 @@ test("cancel between turn/start dispatch and ACK interrupts as soon as the nativ
     try {
       await coordinator.start();
       rootId = coordinator.createRoot("A", "work", {
+        tokenPolicy: "enforce",
         tokens: 1000,
         maxDepth: 1,
         maxAgents: 2,
@@ -866,6 +874,30 @@ test("a still-unowned foreign Turn prevents automatic quarantine release even af
     );
     assert.equal(f.runtime.starts, 0);
   } finally {
+    await f.close();
+  }
+});
+
+test("observe policy recovery with missing native history keeps the unknown Turn and queued input without replay", async () => {
+  const f = fixture("running", "observe");
+  let current = f.coordinator;
+  try {
+    current.store.operatorSend(f.root.id, "queued-observe", "new work");
+    for (let n = 0; n < 2; n++) {
+      await current.start();
+      assert.equal(current.store.attempt(f.a.id).state, "unknown");
+      assert.equal(current.store.attempt(f.a.id).turn_id, "native-turn");
+      assert.equal(current.store.messages(f.root.id)[0]?.status, "queued");
+      assert.equal(current.view(f.root.id).progressPossible, false);
+      assert.equal(current.store.limits(f.root.tree_id).tokenPolicy, "observe");
+      assert.equal((current.runtime as FakeRuntime).starts, 0);
+      await current.stop();
+      const runtime = new FakeRuntime();
+      current = new Coordinator(f.coordinator.options, runtime);
+      assert.equal(runtime.starts, 0);
+    }
+  } finally {
+    await current.stop();
     await f.close();
   }
 });

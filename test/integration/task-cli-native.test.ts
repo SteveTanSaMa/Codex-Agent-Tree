@@ -28,7 +28,8 @@ test(
       await call("init", "--runtime-home", home);
       const seed = new Store(join(state, "business.sqlite"));
       const root = seed.createRoot("A", "paused fixture: no model dispatch", {
-        tokens: 1000,
+        maxTotalTurns: 2,
+        tokens: 1,
         maxDepth: 1,
         maxAgents: 2,
         maxConcurrentTurns: 1,
@@ -39,6 +40,22 @@ test(
       seed.close();
       await call("start");
       const before = await call("view", "--target", root.id);
+      assert.equal(
+        (before.budget as { tokenPolicy: string }).tokenPolicy,
+        "observe",
+      );
+      assert.equal(
+        (before.executionLimits as { maxTotalTurns: number }).maxTotalTurns,
+        2,
+      );
+      await assert.rejects(
+        call("root", "--task", "invalid policy", "--token-policy", "invalid"),
+        /Invalid token policy/,
+      );
+      await assert.rejects(
+        call("root", "--task", "invalid total", "--max-total-turns", "0"),
+        /Invalid maxTotalTurns/,
+      );
       const file = join(home, "task input.json");
       const description =
         'Literal "quotes"\n$(touch never-execute) `text` $HOME';

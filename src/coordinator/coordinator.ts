@@ -655,6 +655,7 @@ export class Coordinator {
       runtimeBlock: this.store.runtimeBlock(agentId) ?? null,
       nativeObservation: this.store.sessionObservation(agentId) ?? null,
       budget: this.store.budgetStatus(agent.tree_id),
+      executionLimits: this.store.executionStatus(agent.tree_id),
       execution: active?.state ?? (attempts.length ? "idle" : "initializing"),
       attemptCount: attempts.length,
       attempts: attempts.slice(-20).map((a) => {
@@ -676,6 +677,7 @@ export class Coordinator {
     const treeId = this.store.agent(target).tree_id;
     const limits = this.store.limits(treeId);
     const budget = this.store.budgetStatus(treeId);
+    const executionLimits = this.store.executionStatus(treeId);
     const reasons: { agentId: string | null; code: string }[] = [];
     let progressPossible = false;
     const agents = this.store.agents(treeId).map((agent) => {
@@ -699,8 +701,10 @@ export class Coordinator {
         const exhausted =
           !active &&
           (agent.turns >= limits.maxTurnsPerAgent ||
-            agent.capacity - agent.spent - agent.reserved <
-              limits.turnReservation);
+            executionLimits.remainingTurns === 0 ||
+            (budget.enforced &&
+              agent.capacity - agent.spent - agent.reserved <
+                limits.turnReservation));
         if (exhausted) reasons.push({ agentId: agent.id, code: "agent-limit" });
         if (
           agent.desired === "active" &&
@@ -708,6 +712,7 @@ export class Coordinator {
           active?.state !== "unknown" &&
           !exhausted &&
           (active?.state === "prepared" ||
+            !budget.enforced ||
             (budget.availableTokens >= limits.turnReservation &&
               !budget.unknownUsageAttempts.length))
         )
@@ -738,13 +743,16 @@ export class Coordinator {
       progressPossible = false;
       reasons.push({ agentId: null, code: "runtime-not-ready" });
     }
-    if (budget.unknownUsageAttempts.length)
+    if (budget.enforced && budget.unknownUsageAttempts.length)
       reasons.push({ agentId: null, code: "unknown-usage" });
     if (
-      budget.excessLiabilityTokens > 0 ||
-      budget.availableTokens < limits.turnReservation
+      budget.enforced &&
+      (budget.excessLiabilityTokens > 0 ||
+        budget.availableTokens < limits.turnReservation)
     )
       reasons.push({ agentId: null, code: "tree-budget" });
+    if (executionLimits.remainingTurns === 0)
+      reasons.push({ agentId: null, code: "tree-turn-limit" });
     const tasks = this.store.tasks.list(null, target);
     if (!progressPossible)
       reasons.push({
@@ -759,6 +767,7 @@ export class Coordinator {
       agents,
       tasks,
       budget,
+      executionLimits,
       progressPossible,
       reasons,
       taskCompletionIsExplicit: true,

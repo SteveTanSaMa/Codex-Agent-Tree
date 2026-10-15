@@ -86,7 +86,7 @@ test(
         ],
         { cwd: workspace, timeout: 15000 },
       );
-      const prompt = `Use $codex-agent-tree to solve this supplied-text task with a three-node A→B→C recursive team and retrieve the final synthesis: there are six racks, each holding seven packets. Calculate the total and report the actual child result. Root A must delegate to B, B must delegate the calculation to C, and reports must return C→B→A. Do not calculate the answer yourself.\nThe skill is installed at ${skill}. It is already set up. Dedicated team state ${state} is initialized with dedicated runtime home ${runtime}; start it. Use request key installed-skill-acceptance and max-agents 3, max-depth 2, tokens 600000. Instruct A to allocate 300000 tokens to B and B to allocate 120000 to C; the explicit task-tool workflow needs a larger pool than a message-only calculation. Require A to create exactly two tasks using its native agent_task_create tools: calculation, and verification blockedBy calculation. A passes both IDs to B; B passes the calculation ID to C. C gets and claims calculation using agent_task_get/update, computes the total, explicitly completes it with its result, then reports to B. B reads the completed calculation, claims and explicitly completes verification using its tools, and reports to A. A checks both completed results before final synthesis. Use stable requestKey per operation and current expectedRevision, and preserve the two tasks for inspection. End initial delegation Turns and explicitly acknowledge result messages. As operator use view and at least one CLI wait with its cursor while the team works, then retrieve the managed team's result. Operate only this test team and workspace. Do not read or print auth files, change host configuration, or use native subagent tools. Return the stable Root ID and result. Leave the team for the test harness to inspect and stop.`;
+      const prompt = `Use $codex-agent-tree to solve this supplied-text task with a three-node A→B→C recursive team and retrieve the final synthesis: there are six racks, each holding seven packets. Calculate the total and report the actual child result. Root A must delegate to B, B must delegate the calculation to C, and reports must return C→B→A. Do not calculate the answer yourself.\nThe skill is installed at ${skill}. It is already set up. Dedicated team state ${state} is initialized with dedicated runtime home ${runtime}; start it. Use request key installed-skill-acceptance and max-agents 3, max-depth 2, max-total-turns 10, tokens 100 as a deliberately low warning threshold. Omit token-policy so the new default observe policy applies. Do not allocate child tokens; instruct A and B to omit tokens when spawning. Token warnings must not stop the result flow. Require A to create exactly two tasks using its native agent_task_create tools: calculation, and verification blockedBy calculation. A passes both IDs to B; B passes the calculation ID to C. C gets and claims calculation using agent_task_get/update, computes the total, explicitly completes it with its result, then reports to B. B reads the completed calculation, claims and explicitly completes verification using its tools, and reports to A. A checks both completed results before final synthesis. Use stable requestKey per operation and current expectedRevision, and preserve the two tasks for inspection. End initial delegation Turns and explicitly acknowledge result messages. As operator use view and at least one CLI wait with its cursor while the team works, then retrieve the managed team's result. Operate only this test team and workspace. Do not read or print auth files, change host configuration, or use native subagent tools. Return the stable Root ID and result. Leave the team for the test harness to inspect and stop.`;
       const outputPath = join(directory, "operator-output.jsonl");
       evidence.operatorOutput = outputPath;
       writeFileSync(outputPath, "", { mode: 0o600 });
@@ -149,6 +149,20 @@ test(
         ownerId: string;
         blockedBy: string[];
       }>;
+      const view = (await call("view", "--target", root.id)) as {
+        budget: {
+          tokenPolicy: string;
+          warningExceeded: boolean;
+          observedTokens: number;
+        };
+        executionLimits: { maxTotalTurns: number; usedTurns: number };
+      };
+      evidence.view = view;
+      assert.equal(view.budget.tokenPolicy, "observe");
+      assert.equal(view.budget.warningExceeded, true);
+      assert.ok(view.budget.observedTokens > 100);
+      assert.equal(view.executionLimits.maxTotalTurns, 10);
+      assert.ok(view.executionLimits.usedTurns <= 10);
       evidence.tasks = tasks;
       assert.equal(tasks.length, 2);
       assert.ok(tasks.every((task) => task.status === "completed"));

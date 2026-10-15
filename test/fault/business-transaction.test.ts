@@ -12,6 +12,7 @@ test("mid-spawn storage failure rolls back allocation, identity, idempotency key
   const injector = new DatabaseSync(path);
   try {
     const root = store.createRoot("A", "delegate", {
+      tokenPolicy: "enforce",
       tokens: 10000,
       maxDepth: 2,
       maxAgents: 3,

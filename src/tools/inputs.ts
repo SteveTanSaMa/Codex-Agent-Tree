@@ -22,17 +22,14 @@ function object(value: unknown, allowed: string[]): Record<string, unknown> {
 }
 export function spawnInput(value: unknown) {
   const o = object(value, ["requestKey", "name", "role", "task", "tokens"]);
-  requireCondition(
-    typeof o.tokens === "number",
-    "INVALID_INPUT",
-    "Child token allocation required",
-  );
   return {
     requestKey: text(o.requestKey, "requestKey", 128),
     name: text(o.name, "name", 96),
     role: text(o.role, "role", 1024),
     task: text(o.task, "task"),
-    tokens: integer(o.tokens, "tokens", 1),
+    ...(o.tokens === undefined
+      ? {}
+      : { tokens: integer(o.tokens as number, "tokens", 1) }),
   };
 }
 export function sendInput(value: unknown) {
@@ -159,7 +156,7 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_spawn",
-    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Budget is transferred from your own allocation. Accepted creation may still be initializing.",
+    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Token allocation is optional in observe mode; enforce mode requires tokens transferred from your own allocation. Structural and lifetime limits always apply. Accepted creation may still be initializing.",
     {
       requestKey: string,
       name: string,
@@ -167,7 +164,7 @@ export const agentTools: DynamicTool[] = [
       task: string,
       tokens: { type: "integer", minimum: 1 },
     },
-    ["requestKey", "name", "role", "task", "tokens"],
+    ["requestKey", "name", "role", "task"],
   ),
   tool(
     "agent_send",
