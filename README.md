@@ -79,7 +79,7 @@ npm run package:skill
 
 默认测试不消耗模型用量。真实测试使用独立临时目录，清理测试认证副本与自有 daemon；生成证据在 `.artifacts/evidence/`，不纳入 Git。递归示例见 [example](examples/recursive-team/README.md)。
 
-[首轮审查处理](docs/review-round-1.md) · [架构与设计取舍](docs/architecture.md) · [验证范围](docs/validation.md) · [Skill 入口](SKILL.md)
+[DeepSeek 实现参考](docs/deepseek-agent-team.md) · [首轮审查处理](docs/review-round-1.md) · [架构与设计取舍](docs/architecture.md) · [验证范围](docs/validation.md) · [Skill 入口](SKILL.md)
 
 ## 许可
 
