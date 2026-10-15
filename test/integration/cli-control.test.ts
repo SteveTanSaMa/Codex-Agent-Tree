@@ -100,3 +100,36 @@ test("serve never removes an existing regular file at the control socket path", 
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test("CLI responses preserve UTF-8 split inside a character", async () => {
+  const state = mkdtempSync("/tmp/cat-cli-utf8-");
+  writeFileSync(join(state, "operator-token"), "fixture-secret");
+  const text = "你好，🌲";
+  const server = createServer((socket) =>
+    socket.once("data", () => {
+      const bytes = Buffer.from(JSON.stringify({ result: { text } }) + "\n");
+      const boundary = bytes.indexOf(Buffer.from("你")) + 1;
+      socket.write(bytes.subarray(0, boundary));
+      setTimeout(() => socket.end(bytes.subarray(boundary)), 30);
+    }),
+  );
+  await new Promise<void>((r) => server.listen(join(state, "control.sock"), r));
+  try {
+    const result = await execute(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../../src/cli/main.ts", import.meta.url)),
+        "status",
+        "--target",
+        "root",
+        "--state",
+        state,
+      ],
+      { timeout: 5000 },
+    );
+    assert.equal(JSON.parse(result.stdout).text, text);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(state, { recursive: true, force: true });
+  }
+});

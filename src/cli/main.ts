@@ -53,6 +53,7 @@ async function request(
 ): Promise<unknown> {
   return new Promise((yes, no) => {
     const socket = createConnection(socketPath);
+    socket.setEncoding("utf8");
     let buffer = "";
     const timer = setTimeout(
       () =>
@@ -155,6 +156,7 @@ async function serve() {
     await coordinator.stop(channelClosed);
   };
   const server = createServer((socket) => {
+    socket.setEncoding("utf8");
     connections.add(socket);
     const abandoned = new AbortController();
     socket.once("close", () => abandoned.abort());

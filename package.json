@@ -17,7 +17,7 @@
     "cat": "node src/cli/main.ts",
     "skill": "node scripts/cat.mjs",
     "package:skill": "python3 scripts/package-skill.py",
-    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts' 'scripts/*.mjs' 'examples/**/*.ts' 'examples/**/*.md' package.json tsconfig.json"
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts' 'scripts/*.mjs' 'scripts/diagnostics/**/*.ts' 'examples/**/*.ts' 'examples/**/*.md' package.json tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

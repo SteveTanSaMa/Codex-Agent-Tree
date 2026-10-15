@@ -957,6 +957,13 @@ export class Store {
     requireCondition(row, "NOT_FOUND", "Attempt not found");
     return row as unknown as Attempt;
   }
+  attemptForTurn(threadId: string, turnId: string): Attempt | undefined {
+    return this.one(
+      "SELECT * FROM turn_attempts WHERE thread_id=? AND turn_id=?",
+      threadId,
+      turnId,
+    ) as unknown as Attempt | undefined;
+  }
   attempts(agentId?: string): Attempt[] {
     return this.all(
       `SELECT * FROM turn_attempts ${agentId ? "WHERE agent_id=?" : ""} ORDER BY created_at,id`,

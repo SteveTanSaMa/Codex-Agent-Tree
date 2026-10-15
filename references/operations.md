@@ -106,3 +106,7 @@ An accepted Turn with a lost reply is adopted only from its known Turn ID or uni
 ## Current scope
 
 Validated on macOS arm64, Node 26.3.1, one file-backed login domain, fixed Codex alpha. No managed shell/file inspection, parallel repository writes, worktrees, merge automation, automatic DAG execution, multi-machine scheduler, or GUI. Budget controls cannot promise exact provider billing; recovery cannot promise exactly-once external effects. The operator CLI is trusted local control, not an isolation boundary against arbitrary code run as that OS user.
+
+## Known accounting gap under review
+
+A human final usage receipt followed by a later Turn without the earlier final native usage notification can double-count the difference in `spent`. This is a confirmed open issue, not provider double billing. See the [architecture review](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/review-architecture.md) for the repository-only diagnostic and reconciliation design. Do not treat that incomplete attribution as exact cost or sufficient evidence for a budget decision.

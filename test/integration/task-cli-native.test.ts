@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { createConnection } from "node:net";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -152,10 +154,55 @@ test(
         ).result,
         "42",
       );
+      const descriptionUtf8 = "中文跨块 🌲";
+      const body = Buffer.from(
+        JSON.stringify({
+          token: readFileSync(join(state, "operator-token"), "utf8").trim(),
+          method: "task-create",
+          params: {
+            target: root.id,
+            input: {
+              requestKey: "utf8",
+              subject: "UTF-8",
+              description: descriptionUtf8,
+            },
+          },
+        }) + "\n",
+      );
+      const boundary = body.indexOf(Buffer.from("中")) + 1;
+      const received = await new Promise<{ result: { description: string } }>(
+        (resolve, reject) => {
+          const socket = createConnection(join(state, "control.sock"));
+          socket.setEncoding("utf8");
+          let text = "";
+          const timer = setTimeout(
+            () => socket.destroy(new Error("fragmented request deadline")),
+            3000,
+          );
+          socket.once("connect", () => {
+            socket.write(body.subarray(0, boundary));
+            setTimeout(() => socket.write(body.subarray(boundary)), 30);
+          });
+          socket.on("data", (chunk) => {
+            text += chunk;
+            if (text.includes("\n")) {
+              clearTimeout(timer);
+              resolve(JSON.parse(text));
+              socket.end();
+            }
+          });
+          socket.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+        },
+      );
+      assert.equal(received.result.description, descriptionUtf8);
+      const beforeRestart = await call("view", "--target", root.id);
       await call("stop");
       await call("start");
       const after = await call("view", "--target", root.id);
-      assert.equal(after.cursor, view.cursor);
+      assert.equal(after.cursor, beforeRestart.cursor);
       assert.equal((after.tasks as { id: string }[])[0]?.id, created.id);
       assert.equal(
         (after.agents as { desired: string; attemptCount: number }[])[0]

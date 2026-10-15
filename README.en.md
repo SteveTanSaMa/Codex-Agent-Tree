@@ -108,7 +108,7 @@ Default tests do not consume model usage. Real tests use isolated temporary dire
 
 This alpha does not support Linux/Windows qualification, multiple credential domains, automatic DAG execution, repository writes, a GUI or interactive approval queues. Recovery preserves ambiguous work as unknown rather than blindly replaying it. There is no claim of exactly-once external effects or evidence that teams outperform a single agent on quality or cost.
 
-[Execution limits plan](docs/execution-limits-plan.md) · [Task board plan](docs/task-board-plan.md) · [DeepSeek comparison](docs/deepseek-agent-team.md) · [Review fixes](docs/review-round-1.md) · [Architecture](docs/architecture.md) · [Validation](docs/validation.md) · [Skill entry](SKILL.md)
+[Execution limits plan](docs/execution-limits-plan.md) · [Task board plan](docs/task-board-plan.md) · [DeepSeek comparison](docs/deepseek-agent-team.md) · [Review fixes](docs/review-round-1.md) · [Architecture review and open issues](docs/review-architecture.md) · [Architecture](docs/architecture.md) · [Validation](docs/validation.md) · [Skill entry](SKILL.md)
 
 ## License
 

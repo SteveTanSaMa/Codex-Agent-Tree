@@ -344,6 +344,7 @@ export class Coordinator {
                   "CONFLICT",
                   "Turn ACK differs from observed event",
                 );
+              this.store.clearRecoveredRuntimeBlock(current.agent_id);
               if (
                 ["cancelled", "terminated"].includes(
                   this.store.agent(current.agent_id).desired,
@@ -378,9 +379,7 @@ export class Coordinator {
     }
   }
   private eventAttempt(threadId: string, turnId: string): Attempt | undefined {
-    return this.store
-      .attempts()
-      .find((a) => a.thread_id === threadId && a.turn_id === turnId);
+    return this.store.attemptForTurn(threadId, turnId);
   }
   private async handleEvent(event: RuntimeEvent) {
     if (!this.runtime.isCurrent(event.connectionGeneration)) return;
@@ -397,9 +396,33 @@ export class Coordinator {
       const starting = this.store
         .attempts()
         .find((a) => a.thread_id === threadId && a.state === "starting");
-      if (starting && !starting.turn_id)
-        this.store.attachTurn(starting.id, starting.binding_generation, turnId);
+      if (starting && !starting.turn_id) {
+        // A start notification is not a reply to our request. Another client may
+        // have started a Turn between the idle check and our turn/start RPC.
+        // Before the ACK, only persisted input carrying our marker proves ownership.
+        try {
+          const turns = nativeTurns(await this.runtime.readThread(threadId));
+          if (!this.runtime.isCurrent(event.connectionGeneration)) return;
+          const current = this.store.attempt(starting.id);
+          if (
+            ["starting", "unknown"].includes(current.state) &&
+            current.turn_id === null &&
+            turns.filter((t) => t.id === turnId && attemptMarker(t, current.id))
+              .length === 1
+          )
+            this.store.attachTurn(
+              current.id,
+              current.binding_generation,
+              turnId,
+            );
+        } catch {
+          // Unavailable history cannot establish ownership. The ACK/recovery
+          // may prove it later; until then the tools remain fail-closed.
+        }
+      }
+      if (!this.runtime.isCurrent(event.connectionGeneration)) return;
       const observed = this.eventAttempt(threadId, turnId);
+      if (observed) this.store.clearRecoveredRuntimeBlock(observed.agent_id);
       if (
         observed &&
         ["cancelled", "terminated"].includes(
