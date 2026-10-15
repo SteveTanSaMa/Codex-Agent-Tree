@@ -258,6 +258,14 @@ export class Coordinator {
               sender: message.sender_id,
               message: message.body,
             }).length;
+            if (size > 44000) {
+              this.store.rejectQueuedMessage(
+                agent.id,
+                message.id,
+                `Serialized message exceeds the 44000-character delivery limit (${size})`,
+              );
+              continue;
+            }
             if (queued.length >= 20 || encodedSize + size > 44000) break;
             queued.push(message);
             encodedSize += size;

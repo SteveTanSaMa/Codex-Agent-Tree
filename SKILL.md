@@ -44,6 +44,8 @@ Keep the returned stable Root ID and request key. Retry an uncertain submission 
 
 If a Turn is `unknown`, quarantined, failed, or has unsettled cost, inspect `status`, `events`, and `native-history`. Do not replay work, clear a quarantine, or invent a final usage amount to make progress. Read [operations](references/operations.md) for recovery and accounting.
 
+A `processed` receipt confirms consumption in a successful Turn, not completion of a delegated task. If a message is `rejected`, report its ID and the `message.delivery_rejected` reason from `events`; later messages may still run. Include any positive `budget.excessLiabilityTokens` in the result as a budget warning, without describing it as exact provider billing.
+
 ## Operate an existing team
 
 ```sh

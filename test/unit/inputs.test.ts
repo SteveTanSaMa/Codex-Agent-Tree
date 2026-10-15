@@ -53,3 +53,31 @@ test("tool bounds reject malformed cost and control escalation", () => {
     scope: "subtree",
   });
 });
+
+test("accepted message escapes remain bounded and malformed UTF-16 cannot be silently changed in storage", () => {
+  for (const message of [
+    '"'.repeat(12000),
+    "\\".repeat(12000),
+    "\t".repeat(11999) + "x",
+    "😀".repeat(6000),
+  ]) {
+    const input = sendInput({
+      requestKey: "edge",
+      target: "recipient",
+      message,
+    });
+    assert.equal(input.message, message);
+    assert.ok(JSON.stringify(message).length <= 24002);
+  }
+  for (const message of [
+    "\u0001".repeat(12000),
+    "\ud800".repeat(12000),
+    "\udc00",
+    "valid prefix\ud800",
+  ]) {
+    assert.throws(
+      () => sendInput({ requestKey: "edge", target: "recipient", message }),
+      /Invalid message/,
+    );
+  }
+});

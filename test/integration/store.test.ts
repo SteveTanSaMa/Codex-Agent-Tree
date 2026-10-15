@@ -52,6 +52,72 @@ function running(
 const error = (code: string) => (e: unknown) =>
   e instanceof AgentTreeError && e.code === code;
 
+test("processed receipt confirms consumption while the delegated child remains running, including after reopen", () => {
+  const f = fixture();
+  try {
+    const root = f.store.createRoot("A", "delegate input", limits);
+    const message = f.store.operatorSend(
+      root.id,
+      "input",
+      "delegate this request",
+    );
+    const ar = running(f.store, root.id, "thread-a");
+    const child = f.store.spawn(ar.actor, "delegate", {
+      name: "B",
+      role: "worker",
+      task: "perform delegated work",
+      tokens: 1000,
+    });
+    const br = running(f.store, child.id, "thread-b");
+    f.store.acknowledge(ar.actor, [message]);
+    assert.equal(f.store.messages(root.id)[0]?.status, "acknowledged");
+    f.store.observeUsage(ar.attempt, 1, 10);
+    f.store.finish(
+      ar.attempt,
+      1,
+      "completed",
+      "Delegated; waiting for child result",
+    );
+    f.reopen();
+    assert.equal(f.store.messages(root.id)[0]?.status, "processed");
+    assert.equal(f.store.attempt(ar.attempt).state, "completed");
+    assert.equal(f.store.attempt(br.attempt).state, "running");
+    assert.equal(f.store.messages(root.id).length, 1);
+  } finally {
+    f.close();
+  }
+});
+
+test("tree budget exposes excess liability and persists one threshold alert without hiding actual overruns", () => {
+  const f = fixture();
+  try {
+    const root = f.store.createRoot("A", "work", limits);
+    const ar = running(f.store, root.id, "thread-a");
+    assert.equal(f.store.budgetStatus(root.tree_id).availableTokens, 9900);
+    f.store.observeNativeUsage(ar.attempt, 1, 10050);
+    const pool = f.store.budgetStatus(root.tree_id);
+    assert.equal(pool.availableTokens, 0);
+    assert.equal(pool.excessLiabilityTokens, 50);
+    f.store.observeNativeUsage(ar.attempt, 1, 10050);
+    f.store.observeNativeUsage(ar.attempt, 1, 10060);
+    f.store.finish(ar.attempt, 1, "completed", "done with excess usage");
+    assert.equal(f.store.agent(root.id).spent, 10060);
+    assert.equal(f.store.budgetStatus(root.tree_id).excessLiabilityTokens, 60);
+    const events = f.store
+      .events(root.id)
+      .filter((e) => e.kind === "budget.tree_overcommitted");
+    assert.equal(events.length, 1);
+    f.reopen();
+    assert.equal(f.store.budgetStatus(root.tree_id).excessLiabilityTokens, 60);
+    assert.throws(
+      () => f.store.prepare(root.id, "cannot spend more"),
+      error("BUDGET_EXHAUSTED"),
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("persistent recursive tree, idempotent spawn, allocation conservation and provenance", () => {
   const f = fixture();
   try {

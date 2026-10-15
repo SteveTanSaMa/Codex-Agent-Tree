@@ -433,10 +433,15 @@ export class Store {
       "SELECT t.id FROM turn_attempts t JOIN agents a ON a.id=t.agent_id WHERE a.tree_id=? AND t.state IN ('completed','failed','interrupted') AND t.reserved>0",
       treeId,
     ).map((a) => String(a.id));
+    const tokens = this.limits(treeId).tokens;
+    const spent = Number(totals.spent ?? 0);
+    const reserved = Number(totals.reserved ?? 0);
     return {
-      tokens: this.limits(treeId).tokens,
-      spent: Number(totals.spent ?? 0),
-      reserved: Number(totals.reserved ?? 0),
+      tokens,
+      spent,
+      reserved,
+      availableTokens: Math.max(0, tokens - spent - reserved),
+      excessLiabilityTokens: Math.max(0, spent + reserved - tokens),
       unknownUsageAttempts: unknown,
     };
   }
@@ -689,6 +694,26 @@ export class Store {
         String(a.created_at).localeCompare(String(b.created_at)) ||
         String(a.id).localeCompare(String(b.id)),
     ) as unknown as Message[];
+  }
+  rejectQueuedMessage(agentId: string, messageId: string, reason: string) {
+    text(reason, "delivery failure reason", 2048);
+    this.transaction(() => {
+      const agent = this.agent(agentId);
+      const message = this.messages(agentId).find((m) => m.id === messageId);
+      requireCondition(
+        message?.status === "queued",
+        "CONFLICT",
+        "Only a queued message can be rejected before delivery",
+      );
+      const table =
+        message.origin === "human" ? "operator_messages" : "messages";
+      this.run(`UPDATE ${table} SET status='rejected' WHERE id=?`, messageId);
+      this.event(agent, "message.delivery_rejected", {
+        messageId,
+        origin: message.origin,
+        reason,
+      });
+    });
   }
   operatorSend(target: string, key: string, body: string): string {
     text(key, "input key", 128);
@@ -1333,6 +1358,8 @@ export class Store {
     integer(cumulativeTokens, "cumulative native usage");
     this.transaction(() => {
       const a = this.currentAttempt(id, generation);
+      const agent = this.agent(a.agent_id);
+      const previousPool = this.budgetStatus(agent.tree_id);
       const cursor = this.one(
         "SELECT total FROM usage_cursors WHERE thread_id=? AND binding_generation=?",
         a.thread_id,
@@ -1398,6 +1425,12 @@ export class Store {
         { cumulativeTokens, delta, observed, breakdown: breakdown ?? null },
         id,
       );
+      const pool = this.budgetStatus(agent.tree_id);
+      if (
+        pool.excessLiabilityTokens > 0 &&
+        previousPool.excessLiabilityTokens === 0
+      )
+        this.event(agent, "budget.tree_overcommitted", pool, id);
     });
   }
   accounting(id: string) {

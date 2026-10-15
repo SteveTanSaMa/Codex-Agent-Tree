@@ -19,6 +19,7 @@ class FakeRuntime implements RuntimePort {
   onDisconnect: (e: Error) => void = () => {};
   turns: Record<string, unknown>[] = [];
   starts = 0;
+  inputs: string[] = [];
   failHistory = false;
   failResume = false;
   connected = false;
@@ -56,6 +57,7 @@ class FakeRuntime implements RuntimePort {
   }
   async startTurn(_threadId: string, _input: string, _attemptId: string) {
     this.starts++;
+    this.inputs.push(_input);
     return `fake-turn-${this.starts}`;
   }
   async interrupt() {}
@@ -63,6 +65,242 @@ class FakeRuntime implements RuntimePort {
     this.onEvent({ method, params, connectionGeneration: generation });
   }
 }
+
+test("message batching drains valid escaped inputs and visibly rejects an oversized legacy head without blocking later messages", async () => {
+  for (const mode of ["valid", "legacy-human", "legacy-agent"]) {
+    const legacy = mode !== "valid";
+    const f = fixture("running");
+    try {
+      const body = legacy ? "\u0001".repeat(12000) : '"'.repeat(12000);
+      const first =
+        mode === "legacy-agent"
+          ? f.coordinator.store.send(
+              f.coordinator.store.authenticate("thread-a", "native-turn", 1),
+              "first",
+              f.root.id,
+              "legacy placeholder",
+            )
+          : f.coordinator.store.operatorSend(
+              f.root.id,
+              "first",
+              legacy ? "legacy placeholder" : body,
+            );
+      const second = f.coordinator.store.operatorSend(
+        f.root.id,
+        "second",
+        "\\".repeat(12000),
+      );
+      const third = f.coordinator.store.operatorSend(
+        f.root.id,
+        "third",
+        "small report",
+      );
+      f.coordinator.store.observeUsage(f.a.id, 1, 10);
+      f.coordinator.store.finish(f.a.id, 1, "completed", "initial");
+      // Inject an out-of-contract historical row only in this isolated business DB.
+      // Public text validation rejects its controls, unlike ordinary accepted input.
+      if (legacy)
+        f.coordinator.store.db
+          .prepare(
+            `UPDATE ${mode === "legacy-agent" ? "messages" : "operator_messages"} SET body=? WHERE id=?`,
+          )
+          .run(body, first);
+      for (const [id, date] of [
+        [first, "2000-01-01"],
+        [second, "2000-01-02"],
+        [third, "2000-01-03"],
+      ])
+        for (const table of ["messages", "operator_messages"])
+          f.coordinator.store.db
+            .prepare(`UPDATE ${table} SET created_at=? WHERE id=?`)
+            .run(date!, id!);
+      const encoded = JSON.stringify({
+        id: first,
+        sender: null,
+        message: body,
+      }).length;
+      assert.equal(encoded > 44000, legacy);
+      await f.coordinator.start();
+      assert.equal(f.runtime.starts, 1);
+      assert.equal(f.runtime.inputs[0]?.includes(first), !legacy);
+      assert.equal(f.runtime.inputs[0]?.includes(second), legacy);
+      assert.deepEqual(
+        f.coordinator.store.messages(f.root.id).map((m) => m.status),
+        legacy
+          ? ["rejected", "delivering", "delivering"]
+          : ["delivering", "queued", "queued"],
+      );
+      assert.equal(f.coordinator.store.messages(f.root.id)[0]?.body, body);
+      const finish = async (ids: string[], n: number) => {
+        f.coordinator.store.acknowledge(
+          f.coordinator.store.authenticate("thread-a", `fake-turn-${n}`, 1),
+          ids,
+        );
+        f.runtime.emit("thread/tokenUsage/updated", {
+          threadId: "thread-a",
+          turnId: `fake-turn-${n}`,
+          tokenUsage: { total: { totalTokens: 10 + n } },
+        });
+        f.runtime.emit("turn/completed", {
+          threadId: "thread-a",
+          turn: { id: `fake-turn-${n}`, status: "completed", items: [] },
+        });
+        await new Promise<void>((r) => setImmediate(r));
+      };
+      if (legacy) {
+        assert.ok(f.runtime.inputs[0]?.includes(third));
+        await finish([second, third], 1);
+        assert.equal(f.runtime.starts, 1);
+        const failure = f.coordinator.store
+          .events(f.root.id)
+          .find((e) => e.kind === "message.delivery_rejected");
+        assert.ok(failure);
+        assert.ok(JSON.stringify(failure).includes(first));
+      } else {
+        await finish([first], 1);
+        assert.equal(f.runtime.starts, 2);
+        assert.ok(f.runtime.inputs[1]?.includes(second));
+        assert.ok(f.runtime.inputs[1]?.includes(third));
+        await finish([second, third], 2);
+        assert.equal(f.runtime.starts, 2);
+      }
+      assert.deepEqual(
+        f.coordinator.store.messages(f.root.id).map((m) => m.status),
+        legacy
+          ? ["rejected", "processed", "processed"]
+          : ["processed", "processed", "processed"],
+      );
+      assert.deepEqual(f.coordinator.diagnostics().errors, []);
+      if (legacy) {
+        await f.coordinator.stop();
+        const reopened = new Store(
+          join(f.coordinator.options.stateDirectory, "business.sqlite"),
+        );
+        try {
+          assert.equal(reopened.messages(f.root.id)[0]?.status, "rejected");
+          assert.equal(reopened.messages(f.root.id)[0]?.body, body);
+          assert.equal(
+            reopened
+              .events(f.root.id)
+              .filter((e) => e.kind === "message.delivery_rejected").length,
+            1,
+          );
+        } finally {
+          reopened.close();
+        }
+      }
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("repeated recovery with empty history retains known or delayed Turn identity and queued messages without replay", async () => {
+  for (const initial of ["starting", "running"] as const) {
+    const f = fixture(initial);
+    let current = f.coordinator;
+    let runtime = f.runtime;
+    const message = current.store.operatorSend(
+      f.root.id,
+      "queued",
+      "pending report",
+    );
+    try {
+      for (let n = 0; n < 3; n++) {
+        await current.start();
+        assert.equal(current.store.attempt(f.a.id).state, "unknown");
+        assert.equal(
+          current.store.attempt(f.a.id).turn_id,
+          initial === "running" ? "native-turn" : null,
+        );
+        assert.equal(current.store.agent(f.root.id).reserved, 100);
+        assert.equal(current.store.messages(f.root.id)[0]?.id, message);
+        assert.equal(current.store.messages(f.root.id)[0]?.status, "queued");
+        assert.equal(runtime.starts, 0);
+        await current.stop();
+        runtime = new FakeRuntime();
+        current = new Coordinator(f.coordinator.options, runtime);
+      }
+      runtime.turns = [turn("native-turn", f.a.id, "completed")];
+      await current.start();
+      assert.equal(current.store.attempt(f.a.id).state, "completed");
+      assert.equal(current.store.attempt(f.a.id).turn_id, "native-turn");
+      assert.equal(current.store.messages(f.root.id)[0]?.status, "queued");
+      assert.equal(
+        current.store.budgetStatus(f.root.tree_id).unknownUsageAttempts.length,
+        1,
+      );
+      assert.equal(runtime.starts, 0);
+    } finally {
+      await current.stop();
+      await f.close();
+    }
+  }
+});
+
+test("a completion during history hydration cannot be overwritten by the stale in-progress snapshot or duplicate the Turn", async () => {
+  const f = fixture("running");
+  let entered: () => void = () => {};
+  let release: () => void = () => {};
+  const reading = new Promise<void>((yes) => {
+    entered = yes;
+  });
+  const gate = new Promise<void>((yes) => {
+    release = yes;
+  });
+  const normalRead = f.runtime.readThread.bind(f.runtime);
+  let firstRead = true;
+  f.runtime.readThread = async () => {
+    if (!firstRead) return normalRead();
+    firstRead = false;
+    const snapshot = {
+      thread: {
+        id: "thread-a",
+        status: { type: "idle" },
+        turns: [turn("native-turn", f.a.id, "inProgress")],
+      },
+    };
+    entered();
+    await gate;
+    return snapshot;
+  };
+  try {
+    f.coordinator.store.operatorSend(
+      f.root.id,
+      "next",
+      "new work after completion",
+    );
+    const starting = f.coordinator.start();
+    await reading;
+    assert.equal(f.runtime.starts, 0);
+    f.runtime.emit("thread/tokenUsage/updated", {
+      threadId: "thread-a",
+      turnId: "native-turn",
+      tokenUsage: { total: { totalTokens: 10 } },
+    });
+    f.runtime.emit("turn/completed", {
+      threadId: "thread-a",
+      turn: turn("native-turn", f.a.id, "completed"),
+    });
+    assert.equal(f.coordinator.store.attempt(f.a.id).state, "completed");
+    release();
+    await starting;
+    assert.equal(f.coordinator.store.attempt(f.a.id).state, "completed");
+    assert.equal(f.runtime.starts, 1);
+    assert.equal(
+      f.coordinator.store
+        .attempts(f.root.id)
+        .filter((a) => ["starting", "running", "unknown"].includes(a.state))
+        .length,
+      1,
+    );
+    assert.equal(f.coordinator.store.attempts(f.root.id).length, 2);
+    assert.deepEqual(f.coordinator.diagnostics().errors, []);
+  } finally {
+    release();
+    await f.close();
+  }
+});
 function fixture(state: "starting" | "running" = "starting") {
   const dir = mkdtempSync(join(tmpdir(), "cat-reconcile-"));
   const path = join(dir, "business.sqlite");

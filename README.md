@@ -2,7 +2,7 @@
 
 一个可安装的 Codex Skill：把提供的文本分析任务委派给可递归创建子节点的独立 Codex Session，持久保存消息、身份、预算和执行记录。关闭调用 CLI 后团队继续运行；消息能唤醒空闲节点，Coordinator 重启后先对账再调度。
 
-**当前版本 `0.1.0-alpha.1`：仅验证 macOS arm64、Node ≥26.3.1、`codex-cli 0.162.0-alpha.17.2`，单凭据域、只读任务。** 团队内禁用 shell，不支持读取调用者仓库、并发写代码或自动合并。应把相关文本放进任务。Skill 的当前对话负责操作团队；团队 Root 是另一个独立 Session。
+**当前版本 `0.1.0-alpha.2`：仅验证 macOS arm64、Node ≥26.3.1、`codex-cli 0.162.0-alpha.17.2`，单凭据域、只读任务。** 团队内禁用 shell，不支持读取调用者仓库、并发写代码或自动合并。应把相关文本放进任务。Skill 的当前对话负责操作团队；团队 Root 是另一个独立 Session。
 
 ## 安装
 
@@ -30,7 +30,7 @@ node "$SKILL_DIR/scripts/cat.mjs" setup
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[alpha Release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-alpha.1) 提供同一套自包含 Skill，不包含依赖缓存或登录状态，解压后同样运行 `setup`。
+`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[alpha Release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-alpha.2) 提供同一套自包含 Skill，不包含依赖缓存或登录状态，解压后同样运行 `setup`。
 
 ## 使用
 
@@ -79,7 +79,7 @@ npm run package:skill
 
 默认测试不消耗模型用量。真实测试使用独立临时目录，清理测试认证副本与自有 daemon；生成证据在 `.artifacts/evidence/`，不纳入 Git。递归示例见 [example](examples/recursive-team/README.md)。
 
-[架构与设计取舍](docs/architecture.md) · [验证范围](docs/validation.md) · [Skill 入口](SKILL.md)
+[首轮审查处理](docs/review-round-1.md) · [架构与设计取舍](docs/architecture.md) · [验证范围](docs/validation.md) · [Skill 入口](SKILL.md)
 
 ## 许可
 

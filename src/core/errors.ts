@@ -28,6 +28,7 @@ export function text(value: unknown, name: string, max = 12000): string {
     typeof value === "string" &&
       value.trim().length > 0 &&
       value.length <= max &&
+      value.isWellFormed() &&
       !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value),
     "INVALID_INPUT",
     `Invalid ${name}`,

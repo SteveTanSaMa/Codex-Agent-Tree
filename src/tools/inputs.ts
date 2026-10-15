@@ -119,7 +119,7 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_ack",
-    "Acknowledge message IDs delivered in your current Turn after handling their content. Processing becomes final only when this Turn completes successfully.",
+    "Acknowledge message IDs delivered in your current Turn after handling their content. The receipt becomes processed only when this Turn completes successfully. This confirms message consumption, not completion of delegated tasks or descendants.",
     {
       messageIds: { type: "array", items: string, minItems: 1, maxItems: 100 },
     },

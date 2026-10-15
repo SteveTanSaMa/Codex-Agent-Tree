@@ -9,11 +9,17 @@ All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state D
 - A first delegation Turn can complete before child results arrive. Team completion requires the requested synthesis, no outstanding descendant work, and processed relevant receipts. A successful submission means acceptance, not completed analysis.
 - `send --target ID --message TEXT --key KEY` adds human input and wakes an eligible Agent. Managed `agent_send` derives the sender from its actual Thread/Turn; it cannot forge an operator message.
 
+Message states describe consumption, not business task completion: `queued` → `delivering` → explicit `acknowledged` → `processed` when that Turn succeeds. A processed message may have delegated work to a child that is still running. There is no task-completion record or DAG dependency verifier in this alpha; evaluate the requested output and descendant work separately. Failure/interruption without a conclusive successful receipt leaves `unknown`, not a fabricated success.
+
+Bodies are limited to 12000 UTF-16 code units and must be well-formed Unicode without disallowed controls. Batches hold up to 20 messages and 44000 serialized characters. An oversized historical row becomes `rejected` before delivery; its original body remains stored, and `events` contains `message.delivery_rejected` with the ID and reason. Later queued messages can proceed. This is a visible terminal delivery failure, not successful consumption or automatic task cancellation.
+
 ## Budgets
 
 Root defaults: `--tokens 200000 --max-depth 2 --max-agents 16 --concurrent 3 --max-turns 20 --reserve 5000`. Agent limits count lifetime accepted Agents; depth starts at zero. Child allocation transfers from the parent's pool. These are per-tree admission/accounting controls, not an account budget or a hard cap on an executing black-box Turn.
 
 When admission fails, inspect remaining budget, reservations, depth/count/Turn limits; reduce delegation, synthesize available results, or report blocked state. Do not create another root to bypass the pool. Failed/interrupted Turns may have partial usage: liability remains until final usage is proven. Cumulative native observations are deduplicated; actual overruns remain visible.
+
+Keep allocation (`Agent.capacity`, transferred on delegation), reservation/liability (`reserved`), and observed/charged usage (`attempt.observed`, `accounting.charged`, Agent `spent`) distinct. `budget.availableTokens` is the tree's arithmetic unencumbered balance; other gates may still block admission. `budget.excessLiabilityTokens` reports positive `spent + reserved - tokens`, including retained liability; it is not a provider invoice. When native usage changes the tree from within budget to excess liability, `budget.tree_overcommitted` persists the warning. Duplicate usage does not duplicate the threshold warning. This visibility does not stop an already executing Turn at a hard limit.
 
 ## Human control
 
