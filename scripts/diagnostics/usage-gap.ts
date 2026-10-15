@@ -1,4 +1,4 @@
-// Known failing diagnostic: a missing final native sample overlaps a human receipt.
+// Regression diagnostic: a missing final native sample must not overlap a human receipt.
 import assert from "node:assert/strict";
 import { Store } from "../../src/storage/store.ts";
 import { mkdtempSync, rmSync } from "node:fs";

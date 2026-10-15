@@ -17,7 +17,7 @@ Resolve `SKILL_DIR` from the directory containing this loaded `SKILL.md`, not th
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-If only dependencies are missing, run `setup` (installs the locked production dependency with npm; no install scripts), then retry `doctor`. If the CLI version or platform differs, report the exact mismatch. Do not silently replace the user's Codex installation. Login requires a file-backed `auth.json` from `codex login`; never print credentials.
+If only dependencies are missing, run `setup` (installs the locked production dependency with npm; no install scripts), then retry `doctor`. If the CLI version or platform differs, report the exact mismatch. Do not silently replace the user's Codex installation. Default login uses a file-backed `auth.json` from `codex login`. For an explicitly requested third-party provider, use the dedicated config and credential options in [operations](references/operations.md#third-party-provider-configuration), then run `doctor --state "$STATE"` for its selected binary. Never print credentials or reuse the ordinary CODEX_HOME as the runtime home.
 
 For a new team, choose dedicated short paths, for example `STATE="$HOME/.cat/team"`, `RUNTIME="$HOME/.cat/runtime"`. Reuse the user's existing team when requested. Never point the runtime home at their ordinary `CODEX_HOME`. `init` copies login into the dedicated home, leaves the source untouched, and refuses an already initialized state.
 

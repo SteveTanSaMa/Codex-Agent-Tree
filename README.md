@@ -6,6 +6,8 @@
 
 **当前版本 `0.1.0-alpha.4`：仅验证 macOS arm64、Node ≥26.3.1、`codex-cli 0.162.0-alpha.17.2`，单凭据域、只读任务。** 团队内禁用 shell，不支持读取调用者仓库、并发写代码或自动合并。应把相关文本放进任务。Skill 的当前对话负责操作团队；团队 Root 是另一个独立 Session。
 
+当前 `main` 已包含尚未发布的用量重复计数修复（schema 7）与第三方凭据接入。alpha.4 ZIP 不含这些修复；升级前请停止并备份 state。详见[用量核算](docs/usage-reconciliation.md)和[第三方配置](references/operations.md#third-party-provider-configuration)。
+
 ## 安装
 
 克隆到 Skill 目录；目标目录应不存在：

@@ -140,6 +140,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS operator_messages(id TEXT PRIMARY KEY, recipient_id TEXT NOT NULL REFERENCES agents(id), input_key TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempt_id TEXT, created_at TEXT NOT NULL, processed_at TEXT, UNIQUE(recipient_id,input_key));
         CREATE TABLE IF NOT EXISTS turn_attempts(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), thread_id TEXT NOT NULL, binding_generation INTEGER NOT NULL, owner_generation INTEGER NOT NULL, turn_id TEXT, state TEXT NOT NULL, input TEXT NOT NULL, trace_id TEXT NOT NULL, parent_turn_id TEXT, trigger_id TEXT, reserved INTEGER NOT NULL, observed INTEGER, result TEXT, created_at TEXT NOT NULL, completed_at TEXT);
         CREATE TABLE IF NOT EXISTS attempt_accounting(attempt_id TEXT PRIMARY KEY REFERENCES turn_attempts(id), charged INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'native');
+        CREATE TABLE IF NOT EXISTS usage_evidence(attempt_id TEXT PRIMARY KEY REFERENCES turn_attempts(id), native_total INTEGER, attested INTEGER, direct_floor INTEGER NOT NULL DEFAULT 0);
         CREATE UNIQUE INDEX IF NOT EXISTS active_agent_attempt ON turn_attempts(agent_id) WHERE state IN ${activeAttempts};
         CREATE UNIQUE INDEX IF NOT EXISTS native_turn ON turn_attempts(thread_id,turn_id) WHERE turn_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, tree_id TEXT, agent_id TEXT, attempt_id TEXT, kind TEXT NOT NULL, owner_generation INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -149,7 +150,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6].includes(
+        [1, 2, 3, 4, 5, 6, 7].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -202,7 +203,44 @@ export class Store {
           );
         }
       }
-      this.run("UPDATE schema_version SET version=6");
+      const upgradeUsage =
+        Number(this.one("SELECT version FROM schema_version")?.version) < 7;
+      if (upgradeUsage) {
+        for (const a of this.all(
+          "SELECT t.*,c.charged,c.source FROM turn_attempts t JOIN attempt_accounting c ON c.attempt_id=t.id",
+        )) {
+          const samples = this.all(
+            "SELECT body FROM events WHERE attempt_id=? AND kind='usage.observed' ORDER BY sequence",
+            String(a.id),
+          );
+          const totals = samples
+            .map((e) => JSON.parse(String(e.body)).cumulativeTokens)
+            .filter((v) => Number.isSafeInteger(v) && v >= 0) as number[];
+          const receipts = this.all(
+            "SELECT body FROM events WHERE attempt_id=? AND kind='budget.settled' ORDER BY sequence",
+            String(a.id),
+          ).map((e) => Number(JSON.parse(String(e.body)).tokens));
+          const attested = receipts.length
+            ? Math.max(...receipts)
+            : a.source === "human-attested"
+              ? Number(a.charged)
+              : null;
+          this.run(
+            "INSERT OR REPLACE INTO usage_evidence VALUES(?,?,?,?)",
+            String(a.id),
+            totals.length ? Math.max(...totals) : null,
+            attested,
+            totals.length
+              ? 0
+              : Number(
+                  a.observed ??
+                    (a.source === "human-attested" ? 0 : a.charged) ??
+                    0,
+                ),
+          );
+        }
+      }
+      this.run("UPDATE schema_version SET version=7");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -222,6 +260,15 @@ export class Store {
           processIdentity(process.pid),
           this.generation,
         );
+        if (upgradeUsage) {
+          for (const b of this.all(
+            "SELECT DISTINCT thread_id,binding_generation FROM turn_attempts",
+          ))
+            this.reconcileUsage(
+              String(b.thread_id),
+              Number(b.binding_generation),
+            );
+        }
         this.db.exec("COMMIT");
       } catch (error) {
         this.db.exec("ROLLBACK");
@@ -1030,6 +1077,11 @@ export class Store {
         Math.max(tokens, a.observed ?? 0),
         id,
       );
+      this.run(
+        "INSERT INTO usage_evidence(attempt_id,direct_floor) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET direct_floor=MAX(direct_floor,excluded.direct_floor)",
+        id,
+        tokens,
+      );
     });
   }
   acknowledge(actor: Actor, messageIds: string[]) {
@@ -1441,6 +1493,84 @@ export class Store {
       );
     });
   }
+  /** Re-derive attribution from ordered prefix evidence, never from charged deltas.
+   * A late receipt may move cost between Turns; it cannot change native facts.
+   * No sample/receipt leaves final usage unknown and its reservation intact. */
+  private reconcileUsage(threadId: string, generation: number) {
+    let prefix = 0;
+    for (const row of this.all(
+      "SELECT t.*,c.charged,c.finalized,e.native_total,e.attested,e.direct_floor FROM turn_attempts t JOIN attempt_accounting c ON c.attempt_id=t.id LEFT JOIN usage_evidence e ON e.attempt_id=t.id WHERE t.thread_id=? AND t.binding_generation=? ORDER BY t.rowid",
+      threadId,
+      generation,
+    )) {
+      requireCondition(
+        row.native_total === null ||
+          row.native_total === undefined ||
+          Number(row.native_total) >= prefix,
+        "CONFLICT",
+        "Native cumulative usage contradicts preceding Turn evidence; reconcile receipts before continuing",
+      );
+      const observed =
+        row.native_total === null || row.native_total === undefined
+          ? row.observed === null
+            ? null
+            : Number(row.direct_floor ?? row.observed)
+          : Math.max(
+              0,
+              Number(row.native_total) - prefix,
+              Number(row.direct_floor ?? 0),
+            );
+      const cost = Math.max(observed ?? 0, Number(row.attested ?? 0));
+      prefix += cost;
+      const terminal = ["completed", "failed", "interrupted"].includes(
+        String(row.state),
+      );
+      const final =
+        (row.attested !== null && row.attested !== undefined) ||
+        (row.state === "completed" && observed !== null);
+      const charged = terminal ? cost : Number(row.charged);
+      const reserved =
+        terminal && final ? 0 : Math.max(Number(row.reserved), cost);
+      this.run(
+        "UPDATE turn_attempts SET observed=?,reserved=? WHERE id=?",
+        observed,
+        reserved,
+        String(row.id),
+      );
+      this.run(
+        "UPDATE attempt_accounting SET charged=?,finalized=? WHERE attempt_id=?",
+        charged,
+        terminal && final ? 1 : 0,
+        String(row.id),
+      );
+      this.run(
+        "UPDATE agents SET spent=spent+?,reserved=reserved+? WHERE id=?",
+        charged - Number(row.charged),
+        reserved - Number(row.reserved),
+        String(row.agent_id),
+      );
+      if (observed !== row.observed || charged !== row.charged)
+        this.event(
+          this.agent(String(row.agent_id)),
+          "usage.attributed",
+          {
+            observed,
+            charged,
+            previousObserved: row.observed,
+            previousCharged: row.charged,
+            nativeTotal: row.native_total ?? null,
+            attested: row.attested ?? null,
+          },
+          String(row.id),
+        );
+    }
+    const owner = this.one(
+      "SELECT agent_id FROM turn_attempts WHERE thread_id=? AND binding_generation=? LIMIT 1",
+      threadId,
+      generation,
+    );
+    if (owner) this.releaseTerminated(String(owner.agent_id));
+  }
   observeNativeUsage(
     id: string,
     generation: number,
@@ -1455,69 +1585,51 @@ export class Store {
       const a = this.currentAttempt(id, generation);
       const agent = this.agent(a.agent_id);
       const previousPool = this.budgetStatus(agent.tree_id);
-      const cursor = this.one(
-        "SELECT total FROM usage_cursors WHERE thread_id=? AND binding_generation=?",
-        a.thread_id,
-        generation,
+      const previous = Number(
+        this.one(
+          "SELECT native_total FROM usage_evidence WHERE attempt_id=?",
+          id,
+        )?.native_total ?? 0,
       );
-      const previous = Number(cursor?.total ?? 0);
       if (cumulativeTokens < previous) {
         this.event(
-          this.agent(a.agent_id),
+          agent,
           "usage.out_of_order",
           { previous, cumulativeTokens },
           id,
         );
         return;
       }
-      const delta = cumulativeTokens - previous;
       this.run(
-        "INSERT INTO usage_cursors VALUES(?,?,?) ON CONFLICT(thread_id,binding_generation) DO UPDATE SET total=excluded.total",
+        "INSERT INTO usage_evidence(attempt_id,native_total) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET native_total=excluded.native_total",
+        id,
+        cumulativeTokens,
+      );
+      // Preserve the event's raw Thread delta independently of per-Turn attribution.
+      const nativePrevious = Number(
+        this.one(
+          "SELECT total FROM usage_cursors WHERE thread_id=? AND binding_generation=?",
+          a.thread_id,
+          generation,
+        )?.total ?? 0,
+      );
+      // The cursor is native evidence only. Human receipts never move it.
+      this.run(
+        "INSERT INTO usage_cursors VALUES(?,?,?) ON CONFLICT(thread_id,binding_generation) DO UPDATE SET total=MAX(total,excluded.total)",
         a.thread_id,
         generation,
         cumulativeTokens,
       );
-      const observed = (a.observed ?? 0) + delta;
-      this.run("UPDATE turn_attempts SET observed=? WHERE id=?", observed, id);
-      if (["completed", "failed", "interrupted"].includes(a.state)) {
-        const accounting = this.one(
-          "SELECT * FROM attempt_accounting WHERE attempt_id=?",
-          id,
-        )!;
-        const charged = Math.max(observed, Number(accounting.charged));
-        const final = a.state === "completed" || accounting.finalized === 1;
-        this.run(
-          "UPDATE agents SET spent=spent+?,reserved=reserved-? WHERE id=?",
-          charged - Number(accounting.charged),
-          final ? a.reserved : 0,
-          a.agent_id,
-        );
-        this.run(
-          "UPDATE attempt_accounting SET charged=?,finalized=? WHERE attempt_id=?",
-          charged,
-          final ? 1 : 0,
-          id,
-        );
-        if (final)
-          this.run("UPDATE turn_attempts SET reserved=0 WHERE id=?", id);
-        this.releaseTerminated(a.agent_id);
-      } else {
-        const additionalLiability = Math.max(0, observed - a.reserved);
-        this.run(
-          "UPDATE agents SET reserved=reserved+? WHERE id=?",
-          additionalLiability,
-          a.agent_id,
-        );
-        this.run(
-          "UPDATE turn_attempts SET reserved=reserved+? WHERE id=?",
-          additionalLiability,
-          id,
-        );
-      }
+      this.reconcileUsage(a.thread_id, generation);
       this.event(
-        this.agent(a.agent_id),
+        agent,
         "usage.observed",
-        { cumulativeTokens, delta, observed, breakdown: breakdown ?? null },
+        {
+          cumulativeTokens,
+          delta: Math.max(0, cumulativeTokens - nativePrevious),
+          observed: this.attempt(id).observed,
+          breakdown: breakdown ?? null,
+        },
         id,
       );
       const pool = this.budgetStatus(agent.tree_id);
@@ -1574,17 +1686,15 @@ export class Store {
         "Cannot erase observed or already charged usage",
       );
       this.run(
-        "UPDATE agents SET spent=spent+?,reserved=reserved-? WHERE id=?",
-        tokens - Number(accounting.charged),
-        a.reserved,
-        a.agent_id,
+        "INSERT INTO usage_evidence(attempt_id,attested) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET attested=excluded.attested",
+        id,
+        tokens,
       );
       this.run(
-        "UPDATE attempt_accounting SET charged=?,finalized=1,source='human-attested' WHERE attempt_id=?",
-        tokens,
+        "UPDATE attempt_accounting SET source='human-attested' WHERE attempt_id=?",
         id,
       );
-      this.run("UPDATE turn_attempts SET reserved=0 WHERE id=?", id);
+      this.reconcileUsage(a.thread_id, generation);
       this.event(
         this.agent(a.agent_id),
         "budget.settled",

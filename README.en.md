@@ -6,6 +6,8 @@ An installable Codex Skill for delegating supplied-text analysis to independent 
 
 **Version `0.1.0-alpha.4`: validated only on macOS arm64, Node ≥26.3.1 and exactly `codex-cli 0.162.0-alpha.17.2`, with one credential domain and read-only tasks.** Managed agents have no shell, cannot inspect the caller's repository, and do not support concurrent code changes or automatic merges. Supply the relevant text in the task. Your current Codex conversation operates the team; the managed Root is a separate session.
 
+Current `main` includes unreleased fixes for usage overlap accounting (schema 7) and explicit third-party provider credentials. The alpha.4 ZIP does not include these fixes. Back up stopped state before upgrading; see [reconciliation](docs/usage-reconciliation.md) and [provider setup](references/operations.md#third-party-provider-configuration).
+
 ## Install
 
 Clone into your skills directory; the destination must not already exist:

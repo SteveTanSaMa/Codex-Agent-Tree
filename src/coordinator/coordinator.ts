@@ -12,6 +12,7 @@ import {
   CodexRuntime,
   record,
   protocolString,
+  type ProviderCredential,
   type RuntimeEvent,
   type RuntimeRequest,
 } from "../runtime/codex/adapter.ts";
@@ -47,6 +48,7 @@ export interface CoordinatorOptions {
   stateDirectory: string;
   runtimeHome: string;
   executable?: string;
+  credential?: ProviderCredential;
   expectedVersion: string;
 }
 function nativeTurns(value: unknown): Record<string, unknown>[] {
@@ -139,6 +141,7 @@ export class Coordinator {
         home: options.runtimeHome,
         expectedVersion: options.expectedVersion,
         ...(options.executable ? { executable: options.executable } : {}),
+        ...(options.credential ? { credential: options.credential } : {}),
       });
     this.runtime.onEvent = (event) => this.background(this.handleEvent(event));
     this.runtime.onRequest = (request) =>

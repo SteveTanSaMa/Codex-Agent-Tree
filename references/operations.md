@@ -85,7 +85,7 @@ When a hard limit blocks progress, reduce delegation, synthesize available resul
 
 An interruption request is not confirmation of stopping. Only confirmed unconsumed child capacity is refunded. Models cannot clear human fences or call settlement/quarantine operator endpoints. Approvals are declined and logged; no interactive approval queue is included.
 
-## Upgrading from alpha.2 / alpha.3
+## Historical alpha.4 upgrade from alpha.2 / alpha.3
 
 Alpha.4 migrates the business database to schema 6, preserving Agents, bindings, messages and budget. This is one-way; older versions refuse schema 6. Existing trees keep their original enforce policy; only new trees default to observe. Stop the Coordinator before replacing source, back up the stopped state directory including any SQLite sidecars, and keep the dedicated runtime home. Do not run old/new Coordinators together or overwrite an active installation. Restart with the existing state so native history is reconciled. Rollback requires the matching pre-upgrade backup and careful reconciliation of any native work executed since it was taken.
 
@@ -101,12 +101,32 @@ An accepted Turn with a lost reply is adopted only from its known Turn ID or uni
 
 `release-quarantine --target ID --reason TEXT` requires human-reviewed history proving no active Turn. It does not resolve unknown attempts, mark messages completed, or erase cost. Do not use merely to unblock a task.
 
-`settle-usage --attempt ID --tokens FINAL_TOTAL --reason TEXT` records an operator-attested final amount after native history confirms a terminal Turn and idle Thread. It cannot be below observed/charged usage. Original observations and provenance remain; late reports add only an uncharged difference. Use an actually verified amount, never an invented one. No model tool exposes this command.
+`settle-usage --attempt ID --tokens FINAL_TOTAL --reason TEXT` records an operator-attested final amount after native history confirms a terminal Turn and idle Thread. It cannot be below observed/charged usage. Original observations and provenance remain; late reports reconcile their coverage with later Turns without duplicating a cumulative prefix. Use an actually verified amount, never an invented one. No model tool exposes this command.
 
 ## Current scope
 
-Validated on macOS arm64, Node 26.3.1, one file-backed login domain, fixed Codex alpha. No managed shell/file inspection, parallel repository writes, worktrees, merge automation, automatic DAG execution, multi-machine scheduler, or GUI. Budget controls cannot promise exact provider billing; recovery cannot promise exactly-once external effects. The operator CLI is trusted local control, not an isolation boundary against arbitrary code run as that OS user.
+Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login or an explicitly selected provider secret), fixed Codex alpha. No managed shell/file inspection, parallel repository writes, worktrees, merge automation, automatic DAG execution, multi-machine scheduler, or GUI. Budget controls cannot promise exact provider billing; recovery cannot promise exactly-once external effects. The operator CLI is trusted local control, not an isolation boundary against arbitrary code run as that OS user.
 
-## Known accounting gap under review
+## Usage evidence reconciliation
 
-A human final usage receipt followed by a later Turn without the earlier final native usage notification can double-count the difference in `spent`. This is a confirmed open issue, not provider double billing. See the [architecture review](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/review-architecture.md) for the repository-only diagnostic and reconciliation design. Do not treat that incomplete attribution as exact cost or sufficient evidence for a budget decision.
+Current source upgrades to schema 7. Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+
+Stop and back up the complete state before upgrading. Older source refuses schema 7. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+
+## Third-party provider configuration
+
+Use a dedicated runtime home and explicitly select a trusted provider config and credential source. The config must declare the matching provider `env_key` and Responses API; do not change the pinned Codex version. Configured model names do not independently prove a provider's underlying routing.
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" init --state "$STATE" --runtime-home "$RUNTIME" \
+  --config-from /absolute/path/provider/config.toml \
+  --provider-env COMMAND_CODE_API_KEY \
+  --keychain-service codex-cli-command-code \
+  --executable /absolute/path/to/codex
+node "$SKILL_DIR/scripts/cat.mjs" doctor --state "$STATE"
+node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
+```
+
+`--keychain-service` is optional and macOS-only: it reads an existing generic password for the current OS user, without creating or changing it. Without that option, set the named credential variable in the environment that launches `start` or `serve`. Variable names must be uppercase and end in KEY or TOKEN. Only this explicitly selected secret is forwarded alongside the existing base/proxy/CA environment; unrelated secrets remain excluded. Missing credentials fail closed. `doctor --state` checks the selected executable and reports the credential source without reading or printing its value; successful doctor alone does not verify model authentication.
+
+`--config-from` copies the selected TOML with private permissions; it refuses different existing runtime config. It suppresses the default App auth.json copy; use `--auth-from` explicitly if this provider also requires file-backed auth. State stores only the credential variable/service names and executable path. The default file-auth path remains available when provider flags are omitted. Shell aliases/functions are not executables: select the actual binary, not the shell function name. Keep state/runtime paths short for Unix sockets.

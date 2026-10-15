@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -13,7 +13,18 @@ function doctor() {
   const [major, minor, patch] = process.versions.node.split(".").map(Number);
   const nodeOK =
     major > 26 || (major === 26 && (minor > 3 || (minor === 3 && patch >= 1)));
-  const codex = spawnSync("codex", ["--version"], {
+  const stateIndex = args.indexOf("--state");
+  const team =
+    stateIndex < 0
+      ? undefined
+      : JSON.parse(
+          readFileSync(
+            join(resolve(args[stateIndex + 1]), "config.json"),
+            "utf8",
+          ),
+        );
+  const executable = team?.executable ?? "codex";
+  const codex = spawnSync(executable, ["--version"], {
     encoding: "utf8",
     timeout: 10000,
   });
@@ -28,6 +39,12 @@ function doctor() {
     codex: {
       ok: !codex.error && codex.status === 0 && version === expected,
       actual: version || "unavailable",
+      executable,
+      credentialSource: team?.credential?.keychainService
+        ? "keychain"
+        : team?.credential
+          ? "environment"
+          : "file-auth",
       required: expected,
     },
     dependencies: {

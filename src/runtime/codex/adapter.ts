@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { resolve, join } from "node:path";
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
@@ -26,7 +26,30 @@ export function protocolString(value: unknown): string {
   );
   return value;
 }
-export function runtimeEnvironment(home: string): NodeJS.ProcessEnv {
+export interface ProviderCredential {
+  envKey: string;
+  keychainService?: string;
+}
+export function validateCredential(credential: ProviderCredential) {
+  requireCondition(
+    /^[A-Z][A-Z0-9_]*(?:KEY|TOKEN)$/.test(credential.envKey),
+    "INVALID_INPUT",
+    "Provider credential variable must be an uppercase KEY or TOKEN name",
+  );
+  requireCondition(
+    credential.keychainService === undefined ||
+      (process.platform === "darwin" &&
+        credential.keychainService.length > 0 &&
+        credential.keychainService.length <= 256 &&
+        !credential.keychainService.includes("\0")),
+    "INVALID_INPUT",
+    "Keychain service requires macOS and a nonempty service name",
+  );
+}
+export function runtimeEnvironment(
+  home: string,
+  credential?: ProviderCredential,
+): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     HOME: homedir(),
@@ -39,12 +62,28 @@ export function runtimeEnvironment(home: string): NodeJS.ProcessEnv {
       )
     )
       environment[key] = value;
+  if (credential) {
+    validateCredential(credential);
+    requireCondition(
+      !credential.keychainService,
+      "INVALID_INPUT",
+      "Keychain credentials must be resolved by the runtime",
+    );
+    const value = process.env[credential.envKey];
+    requireCondition(
+      typeof value === "string" && value.length > 0,
+      "STATE_BLOCKED",
+      `Missing provider credential variable: ${credential.envKey}`,
+    );
+    environment[credential.envKey] = value;
+  }
   return environment;
 }
 export interface RuntimeOptions {
   home: string;
   executable?: string;
   expectedVersion: string;
+  credential?: ProviderCredential;
 }
 export interface DynamicTool {
   type: "function";
@@ -74,11 +113,45 @@ export class CodexRuntime {
   onDisconnect: (error: Error) => void = () => {};
   readonly options: RuntimeOptions;
   constructor(options: RuntimeOptions) {
+    if (options.credential) validateCredential(options.credential);
     this.options = options;
   }
   private async command(args: string[]): Promise<string> {
+    const credential = this.options.credential;
+    const env = runtimeEnvironment(
+      this.options.home,
+      credential?.keychainService ? undefined : credential,
+    );
+    if (credential?.keychainService) {
+      let secret: string;
+      try {
+        const result = await execute(
+          "/usr/bin/security",
+          [
+            "find-generic-password",
+            "-a",
+            userInfo().username,
+            "-s",
+            credential.keychainService,
+            "-w",
+          ],
+          { timeout: 10000, maxBuffer: 65536 },
+        );
+        secret = result.stdout.trim();
+      } catch {
+        throw new Error(
+          "Cannot read configured provider credential from Keychain",
+        );
+      }
+      requireCondition(
+        secret.length > 0,
+        "STATE_BLOCKED",
+        "Configured Keychain credential is empty",
+      );
+      env[credential.envKey] = secret;
+    }
     const { stdout } = await execute(this.options.executable ?? "codex", args, {
-      env: runtimeEnvironment(this.options.home),
+      env,
       timeout: 60000,
       maxBuffer: 1024 * 1024,
     });

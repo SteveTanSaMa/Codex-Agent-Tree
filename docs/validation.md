@@ -1,6 +1,6 @@
 # 验证范围
 
-已验证：macOS arm64，Node 26.3.1，`codex-cli 0.162.0-alpha.17.2`，单文件型登录、只读任务。兼容性依赖实验性 App Server API，版本不匹配拒绝连接。
+已验证：macOS arm64，Node 26.3.1，`codex-cli 0.162.0-alpha.17.2`，文件型登录及下文限定的第三方凭据接入、只读任务。兼容性依赖实验性 App Server API，版本不匹配拒绝连接。
 
 | 命令 | 验证对象 | 模型调用 |
 | --- | --- | --- |
@@ -65,3 +65,18 @@
 接入仍有明确缺口：当前 `runtimeEnvironment` 仅传递基础环境与代理/CA 设置，不传递 provider 的 API key 环境变量；现有 init/真实测试夹具也以文件型 auth.json 为前提。本轮通过临时可执行包装器从钥匙串读取凭据并启动 Codex，显式传给 `CodexRuntime.executable`，没有修改生产适配器、放宽环境过滤或把密钥写入配置。因此结论是该配置下的模型调用与父子协作链路可行，尚不能宣称默认 Skill 安装流程已支持这种认证方式。
 
 原隔离配置的 SHA-256 在基础测试前后相同；两个测试均在临时 home 中运行。团队测试的专用 daemon 已停止，临时 home/包装器已删除，脱敏结果和临时验证脚本仅保留于被 Git 忽略的 `.artifacts/`。本轮未验证第三层递归、第三方模型下的故障恢复、Task DAG、代码修改或完整安装验收，也未做单/多 Agent 成本对照。未发布新 Release。
+
+
+## 2026-10-16 已知问题修复复验（main，尚未发布）
+
+修复 R3：schema 7 分开保存原生累计样本、人工收据和直接下界，按 Turn 顺序核算覆盖关系。原 95/75 诊断现通过；收据晚于后续 Turn、多个缺口、迟到和重复通知均有回归。schema 6 的旧多计记录迁移后为 75，重启保持；缺证据的旧记录保留下界与 unknown，人工收据不会变成伪造的原生观测。矛盾证据事务回滚，另验证旧库迁移失败时 schema、owner 与金额整体回滚。合同和升级边界见[用量证据与核算](usage-reconciliation.md)。
+
+修复第三方接入：`init --config-from --provider-env [--keychain-service] --executable`，`doctor --state` 使用团队选择的二进制；适配器只传递显式指定的凭据，不再依赖临时包装器。默认 App auth.json 复制不再发生于选择自定义 config 的初始化流程；文件型登录原路径继续保留。新增配置复制、禁止覆盖、无密钥持久化、环境过滤及缺凭据拒绝测试。
+
+本轮共 **102 个不同正常用例通过**：默认 70（单元 8、集成 62）、故障 26、原生 4、真实模型 2。类型、格式、Skill 元数据及打包白名单检查通过。原独立 usage-gap 诊断也通过，未计入正常用例数量；未重跑另外四个原有真实模型用例。
+
+真实模型包括原生接纳后丢回复恢复，以及新增可复验的 `test/real/provider-cli.test.ts`。第三方用例经正式 CLI init/doctor/start 创建两个独立 Thread，三个 Turn 全部 completed，父节点返回 `FIXED_PROVIDER_OK 42`、回执 processed、树级 reserved 为 0；不依赖临时凭据包装器。模型仍为配置声明的 `deepseek/deepseek-v4.1-flash` / Command Code。原配置逐字节未变，专用 daemon 已停止、测试目录已删除；测试证据仅在忽略目录 `.artifacts/evidence/`。未做模型质量或成本对照。
+
+可用显式的 CAT_TEST_PROVIDER_REAL=1、CAT_PROVIDER_CONFIG、CAT_PROVIDER_ENV、CAT_PROVIDER_EXECUTABLE 和可选 CAT_PROVIDER_KEYCHAIN_SERVICE 复验该用例；这些变量是配置路径、变量名、二进制路径和服务名，不能填密钥本身。未启用时该第三方用例跳过，不会隐式使用 App 登录。
+
+本轮源码修复尚未发布 Release，alpha.4 ZIP 不包含它们。现有团队升级前停止并备份 state；schema 7 回退需恢复匹配备份。没有修改用户现有团队数据库或 Codex App 配置。

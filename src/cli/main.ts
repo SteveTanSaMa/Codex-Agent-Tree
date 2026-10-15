@@ -20,7 +20,7 @@ import {
   Coordinator,
   type CoordinatorOptions,
 } from "../coordinator/coordinator.ts";
-import { record } from "../runtime/codex/adapter.ts";
+import { record, validateCredential } from "../runtime/codex/adapter.ts";
 import { requireCondition, text, integer } from "../core/errors.ts";
 import { controlInput } from "../tools/inputs.ts";
 
@@ -343,13 +343,46 @@ try {
       flag("runtime-home", join(homedir(), ".cat", "runtime"))!,
     );
     mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
+    const providerEnv = flag("provider-env");
+    const keychainService = flag("keychain-service");
+    const configFrom = flag("config-from");
+    requireCondition(
+      !keychainService || providerEnv,
+      "INVALID_INPUT",
+      "--keychain-service requires --provider-env",
+    );
+    requireCondition(
+      !providerEnv ||
+        configFrom ||
+        existsSync(join(runtimeHome, "config.toml")),
+      "INVALID_INPUT",
+      "Provider credentials require --config-from or an existing dedicated runtime config",
+    );
+    const credential = providerEnv
+      ? { envKey: providerEnv, ...(keychainService ? { keychainService } : {}) }
+      : undefined;
+    if (credential) validateCredential(credential);
+    if (configFrom) {
+      const destination = join(runtimeHome, "config.toml");
+      const content = readFileSync(resolve(configFrom));
+      requireCondition(
+        !existsSync(destination) || readFileSync(destination).equals(content),
+        "CONFLICT",
+        "Runtime config already exists with different contents",
+      );
+      if (!existsSync(destination))
+        writeFileSync(destination, content, { mode: 0o600, flag: "wx" });
+    }
     const authFrom = resolve(
       flag(
         "auth-from",
         join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json"),
       )!,
     );
-    if (!existsSync(join(runtimeHome, "auth.json"))) {
+    if (
+      ((!providerEnv && !configFrom) || flag("auth-from")) &&
+      !existsSync(join(runtimeHome, "auth.json"))
+    ) {
       copyFileSync(
         authFrom,
         join(runtimeHome, "auth.json"),
@@ -374,6 +407,10 @@ try {
           stateDirectory: state,
           runtimeHome,
           expectedVersion: "codex-cli 0.162.0-alpha.17.2",
+          ...(flag("executable")
+            ? { executable: resolve(flag("executable")!) }
+            : {}),
+          ...(credential ? { credential } : {}),
         },
         null,
         2,
@@ -628,7 +665,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init, start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");
