@@ -52,3 +52,16 @@
 ## 2026-10-16 架构审查
 
 本轮针对当前源码执行默认 59、故障 26、原生 4、真实单 Turn 丢回复 1，共 90 项通过；另外四个真实模型用例未重跑。修复外来 started 事件误认领、控制通道 UTF-8 跨块损坏，并将事件查找改用已有唯一索引。另有一个稳定失败的独立账本诊断：人工收据后缺失最终原生样本，下一 Turn 累计量会重复计入差额（95 != 75）。未清除或隐藏该问题，未发布新 Release。完整边界、复现命令及未实施原因见 [架构审查](review-architecture.md)。
+
+## 2026-10-16 第三方模型小范围真实验证
+
+本机终端的 `codex` 是 shell 函数：配置使用独立的 `~/.codex-cli`，实际执行文件仍来自 ChatGPT.app，版本为 `codex-cli 0.162.0-alpha.17.2`，并非另装的二进制。配置模型为 `deepseek/deepseek-v4.1-flash`，经 Command Code 的 Responses 接口调用；凭据来自 macOS 钥匙串。模型名称来自配置，不构成对供应商底层路由的独立证明。
+
+本轮复制该配置到临时专用 CODEX_HOME，未复制 App 的 auth.json。两项真实测试通过：
+
+- 无工具 CLI 调用：约 8.73 秒返回 `PROVIDER_PROBE_OK 42`；报告 input 6667（其中 cached input 4096）、output 41 tokens。
+- 当前源码 Coordinator + 官方专用 daemon：约 46.29 秒完成 A 创建 B、B 发送 `CHILD_RESULT 42`、消息触发 A 的后续 Turn、A 确认并返回 `TREE_PROVIDER_OK 42`。两个独立 Thread、三个 completed Turn，回执 processed，诊断无错误。observe 模式配置最多两名成员、深度 1、并发 2、树级三次 Turn；100-token 告警阈值不会阻断执行。原生观测总量 62630（含缓存输入，不代表账单）。
+
+接入仍有明确缺口：当前 `runtimeEnvironment` 仅传递基础环境与代理/CA 设置，不传递 provider 的 API key 环境变量；现有 init/真实测试夹具也以文件型 auth.json 为前提。本轮通过临时可执行包装器从钥匙串读取凭据并启动 Codex，显式传给 `CodexRuntime.executable`，没有修改生产适配器、放宽环境过滤或把密钥写入配置。因此结论是该配置下的模型调用与父子协作链路可行，尚不能宣称默认 Skill 安装流程已支持这种认证方式。
+
+原隔离配置的 SHA-256 在基础测试前后相同；两个测试均在临时 home 中运行。团队测试的专用 daemon 已停止，临时 home/包装器已删除，脱敏结果和临时验证脚本仅保留于被 Git 忽略的 `.artifacts/`。本轮未验证第三层递归、第三方模型下的故障恢复、Task DAG、代码修改或完整安装验收，也未做单/多 Agent 成本对照。未发布新 Release。
