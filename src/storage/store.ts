@@ -106,6 +106,7 @@ export class Store {
   private commitWaiters = new Set<() => void>();
   private closed = false;
   private runtimeGeneration = 0;
+  private drainingReceipts = false;
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
@@ -150,7 +151,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -240,7 +241,18 @@ export class Store {
           );
         }
       }
-      this.run("UPDATE schema_version SET version=7");
+      // One durable sequence across both message sources. Legacy ties have no
+      // recoverable insertion order; preserve their previous deterministic order.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_receipts(sequence INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES turn_attempts(id), tokens INTEGER NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', UNIQUE(attempt_id,tokens));
+        CREATE TABLE IF NOT EXISTS workspace_commands(agent_id TEXT NOT NULL REFERENCES agents(id), call_id TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL, PRIMARY KEY(agent_id,call_id));
+        CREATE TABLE IF NOT EXISTS message_order(sequence INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE);
+        INSERT OR IGNORE INTO message_order(message_id)
+          SELECT id FROM (SELECT id,created_at FROM messages UNION ALL SELECT id,created_at FROM operator_messages) ORDER BY created_at,id;
+        CREATE TRIGGER IF NOT EXISTS message_enqueue_order AFTER INSERT ON messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
+        CREATE TRIGGER IF NOT EXISTS operator_enqueue_order AFTER INSERT ON operator_messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
+      `);
+      this.run("UPDATE schema_version SET version=8");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -286,6 +298,7 @@ export class Store {
       subtree: (id) => this.subtree(id),
       event: (agent, kind, body) => this.event(agent, kind, body),
     });
+    this.applyPendingReceipts();
   }
   private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
     return this.db.prepare(sql).get(...params) as Row | undefined;
@@ -487,6 +500,99 @@ export class Store {
       "Tool request does not belong to the active Turn",
     );
     return { agentId: String(b.agent_id), threadId, turnId, bindingGeneration };
+  }
+  beginWorkspaceCommand(
+    actor: Actor,
+    callId: string,
+    input: unknown,
+  ): { cached: boolean; result?: unknown } {
+    text(callId, "native tool call ID", 256);
+    return this.transaction(() => {
+      const agent = this.actor(actor);
+      this.dispatchable(agent);
+      const fp = fingerprint({ turnId: actor.turnId, input });
+      const prior = this.one(
+        "SELECT * FROM workspace_commands WHERE agent_id=? AND call_id=?",
+        agent.id,
+        callId,
+      );
+      if (prior) {
+        requireCondition(
+          prior.fingerprint === fp,
+          "CONFLICT",
+          "Test call ID changed input",
+        );
+        requireCondition(
+          prior.state === "completed",
+          "STATE_BLOCKED",
+          "Previous test command outcome is unknown or still running; inspect before submitting new work",
+        );
+        return {
+          cached: true,
+          result: JSON.parse(String(prior.result_json)) as unknown,
+        };
+      }
+      this.run(
+        "INSERT INTO workspace_commands VALUES(?,?,?,'accepted',NULL,?)",
+        agent.id,
+        callId,
+        fp,
+        now(),
+      );
+      this.event(agent, "workspace.command.accepted", {
+        callId,
+        turnId: actor.turnId,
+      });
+      return { cached: false };
+    });
+  }
+  finishWorkspaceCommand(agentId: string, callId: string, result: unknown) {
+    this.transaction(() => {
+      this.run(
+        "UPDATE workspace_commands SET state='completed',result_json=? WHERE agent_id=? AND call_id=? AND state='accepted'",
+        JSON.stringify(result),
+        agentId,
+        callId,
+      );
+      this.event(this.agent(agentId), "workspace.command.completed", {
+        callId,
+      });
+    });
+  }
+  workspaceCommandSummary(agentId: string) {
+    return this.one(
+      "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN state='accepted' THEN 1 ELSE 0 END),0) AS unresolved FROM workspace_commands WHERE agent_id=?",
+      agentId,
+    );
+  }
+  pendingUsageReceipts(agentId: string) {
+    return this.all(
+      "SELECT r.attempt_id,r.tokens,r.reason FROM usage_receipts r JOIN turn_attempts t ON t.id=r.attempt_id WHERE t.agent_id=? AND r.state='pending' ORDER BY r.sequence LIMIT 100",
+      agentId,
+    );
+  }
+  workspaceCommands(agentId: string) {
+    return this.all(
+      "SELECT call_id,state,created_at,result_json FROM workspace_commands WHERE agent_id=? ORDER BY rowid DESC LIMIT 20",
+      agentId,
+    )
+      .reverse()
+      .map(({ result_json, ...row }) => {
+        const result =
+          result_json === null
+            ? null
+            : (JSON.parse(String(result_json)) as Record<string, unknown>);
+        return {
+          ...row,
+          result: result
+            ? {
+                ...result,
+                output: String(result.output ?? "").slice(0, 2000),
+                outputPreview: true,
+              }
+            : null,
+        };
+      });
   }
   private actor(actor: Actor): Agent {
     const verified = this.authenticate(
@@ -813,17 +919,15 @@ export class Store {
     this.agent(agentId);
     return [
       ...this.all(
-        "SELECT *, 'agent' AS origin FROM messages WHERE recipient_id=?",
+        "SELECT m.*,o.sequence AS enqueue_sequence, 'agent' AS origin FROM messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=?",
         agentId,
       ),
       ...this.all(
-        "SELECT *, NULL AS sender_id, 'human' AS origin FROM operator_messages WHERE recipient_id=?",
+        "SELECT m.*,o.sequence AS enqueue_sequence, NULL AS sender_id, 'human' AS origin FROM operator_messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=?",
         agentId,
       ),
     ].sort(
-      (a, b) =>
-        String(a.created_at).localeCompare(String(b.created_at)) ||
-        String(a.id).localeCompare(String(b.id)),
+      (a, b) => Number(a.enqueue_sequence) - Number(b.enqueue_sequence),
     ) as unknown as Message[];
   }
   rejectQueuedMessage(agentId: string, messageId: string, reason: string) {
@@ -1643,6 +1747,7 @@ export class Store {
         this.event(agent, "usage.threshold_exceeded", pool, id);
       }
     });
+    this.applyPendingReceipts();
   }
   accounting(id: string) {
     this.attempt(id);
@@ -1655,6 +1760,90 @@ export class Store {
       finalized: row.finalized === 1,
       source: String(row.source),
     };
+  }
+  /** Retain verified operator evidence even when predecessor evidence is missing.
+   * Pending receipts do not release reservations or erase observed facts. */
+  submitUsageReceipt(
+    id: string,
+    generation: number,
+    tokens: number,
+    reason: string,
+  ) {
+    integer(tokens, "attested final usage");
+    text(reason, "settlement reason", 2048);
+    this.transaction(() => {
+      const a = this.attempt(id);
+      requireCondition(
+        a.binding_generation === generation,
+        "STALE_BINDING",
+        "Settlement binding mismatch",
+      );
+      requireCondition(
+        ["completed", "failed", "interrupted"].includes(a.state),
+        "CONFLICT",
+        "Settlement requires terminal execution",
+      );
+      this.run(
+        "INSERT OR IGNORE INTO usage_receipts(attempt_id,tokens,reason) VALUES(?,?,?)",
+        id,
+        tokens,
+        reason,
+      );
+      this.event(
+        this.agent(a.agent_id),
+        "usage.receipt.received",
+        { tokens, reason },
+        id,
+      );
+    });
+    this.applyPendingReceipts();
+    return this.usageReceipts(id);
+  }
+  usageReceipts(id: string) {
+    return this.all(
+      "SELECT tokens,reason,state FROM usage_receipts WHERE attempt_id=? ORDER BY sequence",
+      id,
+    );
+  }
+  private applyPendingReceipts() {
+    if (this.drainingReceipts) return;
+    this.drainingReceipts = true;
+    try {
+      let progress: boolean;
+      do {
+        progress = false;
+        for (const r of this.all(
+          "SELECT * FROM usage_receipts WHERE state='pending' ORDER BY sequence",
+        )) {
+          const a = this.attempt(String(r.attempt_id));
+          try {
+            this.settleFinalUsage(
+              a.id,
+              a.binding_generation,
+              Number(r.tokens),
+              String(r.reason),
+            );
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "CONFLICT"
+            )
+              continue;
+            throw error;
+          }
+          this.transaction(() => {
+            this.run(
+              "UPDATE usage_receipts SET state='applied' WHERE sequence=?",
+              Number(r.sequence),
+            );
+          });
+          progress = true;
+        }
+      } while (progress);
+    } finally {
+      this.drainingReceipts = false;
+    }
   }
   settleFinalUsage(
     id: string,
@@ -1708,6 +1897,7 @@ export class Store {
       );
       this.releaseTerminated(a.agent_id);
     });
+    this.applyPendingReceipts();
   }
   events(agentId: string): Row[] {
     this.agent(agentId);

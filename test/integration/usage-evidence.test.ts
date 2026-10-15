@@ -156,7 +156,7 @@ test("schema 6 migration reconstructs samples and receipts, corrects existing ov
     assert.equal(s.attempt(second).observed, 25);
     assert.equal(
       s.db.prepare("SELECT version FROM schema_version").get()?.version,
-      7,
+      8,
     );
     assert.equal(
       s.events(a.id).filter((e) => e.kind === "budget.settled").length,

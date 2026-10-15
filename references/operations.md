@@ -2,6 +2,8 @@
 
 All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state DIR`. Default state: `~/.cat/team`. Use dedicated short paths because macOS Unix sockets are length-limited. Tested protocol: `codex-cli 0.162.0-alpha.17.2`; do not change the pin without qualification.
 
+For repository coding, initialize a new opt-in workspace using [coding operations](coding.md). Existing text-only teams keep their permissions.
+
 ## Identity, output, and retries
 
 - `root --name NAME --task TEXT --key KEY` returns a stable Agent ID. `--task-file PATH` reads UTF-8 literally. Same key and content returns the existing operation; changed content is rejected.
@@ -10,6 +12,8 @@ All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state D
 - `send --target ID --message TEXT --key KEY` adds human input and wakes an eligible Agent. Managed `agent_send` derives the sender from its actual Thread/Turn; it cannot forge an operator message.
 
 Message states describe consumption, not business task completion: `queued` → `delivering` → explicit `acknowledged` → `processed` when that Turn succeeds. A processed message may have delegated work to a child that is still running. Explicit Task completion and dependency checks are separate records, described below; evaluate the reported output and descendant work as well. Failure/interruption without a conclusive successful receipt leaves `unknown`, not a fabricated success.
+
+Messages accepted by current source use one durable FIFO enqueue sequence across human and Agent sources; request retries keep their original position. Migration preserves historical timestamp/ID ordering because the original cross-source insertion order cannot be recovered.
 
 Bodies are limited to 12000 UTF-16 code units and must be well-formed Unicode without disallowed controls. Batches hold up to 20 messages and 44000 serialized characters. An oversized historical row becomes `rejected` before delivery; its original body remains stored, and `events` contains `message.delivery_rejected` with the ID and reason. Later queued messages can proceed. This is a visible terminal delivery failure, not successful consumption or automatic task cancellation.
 
@@ -109,9 +113,9 @@ Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login 
 
 ## Usage evidence reconciliation
 
-Current source upgrades to schema 7. Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+Current source upgrades to schema 8. Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Older source refuses schema 7. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Older source refuses schema 8. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Third-party provider configuration
 
@@ -130,3 +134,6 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 `--keychain-service` is optional and macOS-only: it reads an existing generic password for the current OS user, without creating or changing it. Without that option, set the named credential variable in the environment that launches `start` or `serve`. Variable names must be uppercase and end in KEY or TOKEN. Only this explicitly selected secret is forwarded alongside the existing base/proxy/CA environment; unrelated secrets remain excluded. Missing credentials fail closed. `doctor --state` checks the selected executable and reports the credential source without reading or printing its value; successful doctor alone does not verify model authentication.
 
 `--config-from` copies the selected TOML with private permissions; it refuses different existing runtime config. It suppresses the default App auth.json copy; use `--auth-from` explicitly if this provider also requires file-backed auth. State stores only the credential variable/service names and executable path. The default file-auth path remains available when provider flags are omitted. Shell aliases/functions are not executables: select the actual binary, not the shell function name. Keep state/runtime paths short for Unix sockets.
+
+
+Operator `settle-usage` now retains a verified receipt as `pending` when preceding evidence prevents safe application. Pending is not finalized and does not release liability. Subsequent compatible receipts/native samples and restart reevaluate it automatically; no resubmission is required. `status.attempts[].usageReceipts` exposes pending/applied evidence. Contradictory evidence stays pending; inspect it instead of inventing another amount. The strict internal settlement operation still refuses erasing native facts.

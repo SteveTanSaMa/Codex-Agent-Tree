@@ -1,4 +1,4 @@
-# 用量证据与核算（schema 7）
+# 用量证据与核算（schema 8）
 
 本次修复对应架构审查 R3。原生通知记录的是 Thread 累计量，人工收据记录的是某个 Turn 的最终量；两者不能直接相加。
 
@@ -20,7 +20,7 @@
 
 ## 旧库迁移
 
-schema 7 为单向升级。先停止 Coordinator，备份完整 state（含存在的 SQLite sidecar），保留专用 runtime home。旧版本会拒绝 schema 7，回退需恢复匹配的备份并对账期间实际执行。
+schema 8 为单向升级。先停止 Coordinator，备份完整 state（含存在的 SQLite sidecar），保留专用 runtime home。旧版本会拒绝 schema 8，回退需恢复匹配的备份并对账期间实际执行。
 
 迁移在取得 owner 的同一事务中，从保留的 `usage.observed` 与 `budget.settled` 事件重建证据，再核算。已有 95/75 重复计数可被修正。没有原生事件的旧记录保留既有 observed 下界；缺少收据事件但标记为 human-attested 的记录保留已确认 charged。缺少证据不会猜测最终用量。迁移不可解释的冲突会拒绝升级并回滚，应保留备份调查。迁移不会改写 Agent 身份、binding、消息或 Turn 次数。
 
@@ -31,3 +31,10 @@ schema 7 为单向升级。先停止 Coordinator，备份完整 state（含存�
 - `test/integration/store.test.ts`：保留原有原生累计、人工收据和中断未知责任断言。
 
 这不是精确供应商账单接口，也没有改变默认 observe 策略、结构限制或执行次数限制。
+
+
+## Beta：保留晚到的人工证据
+
+操作者 `settle-usage` 会先将经核实的回执持久保存到 `usage_receipts`。若当前归属仍包含前序缺口，回执可保持 `pending`；这不会减少已观测用量、不会释放 reservation，也不会解除 enforce 的未知责任。补齐前序回执、收到兼容原生样本或重启后自动重新评估，无需重复提交。可在 `status.attempts[].usageReceipts` 查询 pending/applied。
+
+例如三个原生累计样本为 10、50、85，已核实的每轮最终量为 30、45、10。先提交最后的 10 会暂存 pending；前两轮补齐后，三轮自动归入 30、45、10，合计仍为 85，原生 cursor 不变。相互矛盾的回执仍 pending，须调查来源；不能为了清理状态编造新金额。严格内部结算仍拒绝删除观测事实。对应回归：`test/integration/fifo-receipts.test.ts`。

@@ -2,11 +2,11 @@
 
 [简体中文](README.md) · English
 
-An installable Codex Skill for delegating supplied-text analysis to independent Codex sessions that can recursively create child agents. It persists identities, messages, explicit tasks, budgets and execution records. Teams keep running after the invoking CLI exits; messages wake eligible idle agents, and the Coordinator reconciles native history before scheduling after a restart.
+An installable Codex Skill for recursive teams of independent, recoverable Codex sessions, with message wakeups, task dependencies, controlled coding and conservative recovery.
 
-**Version `0.1.0-alpha.4`: validated only on macOS arm64, Node ≥26.3.1 and exactly `codex-cli 0.162.0-alpha.17.2`, with one credential domain and read-only tasks.** Managed agents have no shell, cannot inspect the caller's repository, and do not support concurrent code changes or automatic merges. Supply the relevant text in the task. Your current Codex conversation operates the team; the managed Root is a separate session.
+**`0.1.0-beta.1`: qualified on macOS arm64, Node ≥26.3.1 and exactly `codex-cli 0.162.0-alpha.17.2`, with one credential domain.** Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved test commands, and deeper members read-only review tools. Your current conversation is the operator; the managed Root is a separate session.
 
-Current `main` includes unreleased fixes for usage overlap accounting (schema 7) and explicit third-party provider credentials. The alpha.4 ZIP does not include these fixes. Back up stopped state before upgrading; see [reconciliation](docs/usage-reconciliation.md) and [provider setup](references/operations.md#third-party-provider-configuration).
+This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 8. Existing read-only teams do not gain permissions automatically.
 
 ## Install
 
@@ -34,7 +34,7 @@ node "$SKILL_DIR/scripts/cat.mjs" setup
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-`setup` runs locked `npm ci --omit=dev --ignore-scripts` inside the Skill, installing only the runtime dependency `ws`. `doctor` makes no model calls. The [alpha release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-alpha.4) contains the same self-contained Skill without dependency caches or credentials; extract it and run `setup`.
+`setup` runs locked `npm ci --omit=dev --ignore-scripts` inside the Skill, installing only the runtime dependency `ws`. `doctor` makes no model calls. The [Beta release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.1) contains the same self-contained Skill without dependency caches or credentials; extract it and run `setup`.
 
 ## Use
 
@@ -69,7 +69,28 @@ node "$SKILL_DIR/scripts/cat.mjs" stop
 node "$SKILL_DIR/scripts/cat.mjs" start
 ```
 
-Pause applies to the subtree by default, drains active Turns and queues messages; `--scope agent` selects one agent. `cancel` requests interruption; `terminate` is permanent. `stop` closes only the Coordinator, leaving the dedicated official daemon and accepted work alive. See [operations](references/operations.md) for full shutdown, recovery, unknown execution and final usage settlement.
+Pause applies to the subtree by default, drains active Turns and queues messages; `--scope agent` selects one agent. `cancel` requests interruption; `terminate` is permanent. `stop` closes the Coordinator and cancels host commands, leaving the dedicated official daemon and accepted native Turns alive. See [operations](references/operations.md) for full shutdown, recovery, unknown execution and final usage settlement.
+
+## Coding teams
+
+Initialize a new team with a clean, committed repository; state and runtime home must be outside it:
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" init --state "$HOME/.cat/code-team" --runtime-home "$HOME/.cat/code-runtime" --workspace /absolute/path/repository --test-commands /absolute/path/tests.json
+node "$SKILL_DIR/scripts/cat.mjs" start --state "$HOME/.cat/code-team"
+```
+
+The operator-authored JSON maps names to fixed executables and argv, for example `{"unit":{"executable":"/opt/homebrew/bin/node","args":["--test","test/sum.test.mjs"]}}`. Omit `--test-commands` if descendants do not need to run tests.
+
+| Level | Files | Commands |
+| --- | --- | --- |
+| Lead | Selected repository; reviews and integrates patches | Host `terminal` for commands, tests and local Git operations |
+| Second | Own detached Git worktree | Approved `run_test` names; no general shell |
+| Third and deeper | Parent worktree read/search/diff | No terminal, writes or test execution |
+
+Restricted tools are `read_file`, hash-checked `write_file`, literal `search_code`, `git_diff` and `run_test`. Host authorization also rejects direct calls to tools hidden from a member. Commands use a macOS sandbox with network disabled, workspace-limited writes, a 30-second timeout and 64 KiB output limit. Persistent receipts protect against automatic replay of uncertain commands.
+
+Each coding state supports one Lead tree. Worktrees start from the initial commit, without dependencies, ignored files or subsequent parent changes. Do not run separate Coordinators against the same Lead checkout. Lead can run integration tests in the original checkout with its existing dependencies. Reported tokens are not billing; this Beta does not establish that teams use fewer tokens than a single agent. See [coding operations](references/coding.md) for setup, recovery and boundaries.
 
 ## Execution limits
 
@@ -91,7 +112,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` combines agent summaries, tasks, budgets, message counts and blocking reasons. Pass its cursor to `wait`, then continue with each response's top-level cursor. `hasMore` indicates another event page. `noProgress` calls for inspecting missing input, fences, budgets or unknown work; it does not prove completion. Operator waiting does not occupy a managed Turn. See [operations](references/operations.md) for permissions, dependency edits, input files and cursor details.
 
-Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Alpha.4 migrates the database to schema 6; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
+Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Beta migrates the database to schema 8; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
 
 ## Development and validation
 
@@ -108,7 +129,7 @@ npm run package:skill
 
 Default tests do not consume model usage. Real tests use isolated temporary directories and clean up copied credentials and their own daemons. Evidence goes to `.artifacts/evidence/` and is not committed. See the [recursive example](examples/recursive-team/README.md).
 
-This alpha does not support Linux/Windows qualification, multiple credential domains, automatic DAG execution, repository writes, a GUI or interactive approval queues. Recovery preserves ambiguous work as unknown rather than blindly replaying it. There is no claim of exactly-once external effects or evidence that teams outperform a single agent on quality or cost.
+This Beta does not qualify Linux/Windows, multiple credential domains, automatic DAG execution, networked commands, automatic merging, a GUI or interactive approval queues. Recovery preserves ambiguous work as unknown rather than blindly replaying it. There is no claim of exactly-once external effects or evidence that teams outperform a single agent on quality or cost.
 
 [Execution limits plan](docs/execution-limits-plan.md) · [Task board plan](docs/task-board-plan.md) · [DeepSeek comparison](docs/deepseek-agent-team.md) · [Review fixes](docs/review-round-1.md) · [Architecture review and open issues](docs/review-architecture.md) · [Architecture](docs/architecture.md) · [Validation](docs/validation.md) · [Skill entry](SKILL.md)
 

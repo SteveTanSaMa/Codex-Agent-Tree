@@ -1,13 +1,13 @@
 ---
 name: codex-agent-tree
-description: Run durable, recursive Codex analysis teams with independent sessions, persistent messages, explicit tasks and dependencies, token budgets, and event waiting. Use when the user wants an asynchronous agent tree or wants to inspect, coordinate, or control an existing team.
+description: Run durable, recursive Codex analysis and coding teams with independent sessions, persistent messages, explicit tasks and dependencies, token budgets, and event waiting. Use when the user wants an asynchronous agent tree or wants to inspect, coordinate, or control an existing team.
 ---
 
 # Codex Agent Tree
 
 Use the bundled CLI to operate a persistent local team. Each managed Agent has its own Codex Thread; children can create children and messages wake idle recipients. The caller's current conversation remains the operator; it does not become the managed Root.
 
-This alpha supports **macOS arm64, Node >=26.3.1, and exactly `codex-cli 0.162.0-alpha.17.2`**. Managed sessions are read-only, with shell and native subagents disabled. Give them the relevant text in their task; they cannot inspect the caller's files or write code. For repository editing, use the caller's normal tools and report this limitation instead of promising worktree isolation.
+Qualified platform: **macOS arm64, Node >=26.3.1, and exactly `codex-cli 0.162.0-alpha.17.2`**. Teams default to text-only analysis. For a user-requested coding team, explicitly select a clean committed repository with `init --workspace PATH`, optionally `--test-commands JSON`; first read [coding operations](references/coding.md). Lead receives an audited terminal, second-level members write isolated Git worktrees through restricted tools, and third-level members review read-only. Native shell and native subagents remain disabled. Do not retrofit permissions into an existing team's configuration.
 
 ## Locate and prepare
 
@@ -25,6 +25,12 @@ For a new team, choose dedicated short paths, for example `STATE="$HOME/.cat/tea
 node "$SKILL_DIR/scripts/cat.mjs" init --state "$STATE" --runtime-home "$RUNTIME"
 node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 ```
+
+## Coding teams
+
+Use the coding workflow only for repository work authorized by the user. Keep state and runtime home outside the repository. Second-level worktrees start from the initialization commit; dependencies and ignored files are not copied. File writes can create missing parent directories within the workspace. Descendants cannot obtain terminal through a task or a prompt. Test commands are operator-authored fixed executable/argv entries, not model-supplied shell strings. Commands are sandboxed, network-disabled and bounded to 30 seconds; inspect failures instead of weakening permissions.
+
+Require coders to report actual diffs, worktree paths and test receipts. Lead reviews and integrates changes using `terminal`, then verifies in its own checkout. Third-level review is static unless the operator performs the test. On an uncertain command receipt, inspect its existing outcome; do not switch call IDs to bypass recovery. Retain worktrees until changes have been reviewed. See [coding operations](references/coding.md) for capabilities and limitations.
 
 ## Delegate and retrieve
 

@@ -1,3 +1,7 @@
+# 最新：Beta 1 验收
+
+Beta 新增的编码、沙箱、命令收据、FIFO、用量回执和实际模型流程见 [Beta 验收记录](beta-validation.md)。以下保留 Alpha 各轮验证的历史事实，不代表 Beta 当前范围。
+
 # 验证范围
 
 已验证：macOS arm64，Node 26.3.1，`codex-cli 0.162.0-alpha.17.2`，文件型登录及下文限定的第三方凭据接入、只读任务。兼容性依赖实验性 App Server API，版本不匹配拒绝连接。

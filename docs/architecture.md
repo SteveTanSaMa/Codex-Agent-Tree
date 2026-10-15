@@ -1,5 +1,7 @@
 # 架构与设计取舍
 
+Beta 增补：显式 Git 编码工作区、分层宿主工具、持久命令收据、跨来源 FIFO，以及 pending 人工用量回执。原生 shell 保持关闭，Lead 通过宿主终端执行命令。边界见[编码操作](../references/coding.md)与[Beta 验收](beta-validation.md)。
+
 交付形态为自包含 Skill + TypeScript Coordinator。模型执行与历史复用 Codex 官方 daemon，JSON-RPC transport 复用 Stoneforge 的 Apache-2.0 模块，来源见 [vendor](../src/runtime/codex/vendor/README.md)。不重写模型执行循环。
 
 ```text

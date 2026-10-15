@@ -1,3 +1,9 @@
+import {
+  WorkspaceBroker,
+  assertWorkspaceSeparation,
+  workspaceTools,
+  type WorkspacePolicy,
+} from "../workspace/broker.ts";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -50,6 +56,7 @@ export interface CoordinatorOptions {
   executable?: string;
   credential?: ProviderCredential;
   expectedVersion: string;
+  workspace?: WorkspacePolicy;
 }
 function nativeTurns(value: unknown): Record<string, unknown>[] {
   const thread = record(record(value).thread);
@@ -117,6 +124,7 @@ function usageBreakdown(value: unknown): Record<string, number | null> {
 export class Coordinator {
   readonly store: Store;
   readonly runtime: RuntimePort;
+  readonly workspace: WorkspaceBroker | undefined;
   private tickRequested = false;
   private requestedInterrupts = new Set<string>();
   private ticking = false;
@@ -134,15 +142,31 @@ export class Coordinator {
       stateDirectory: resolve(readonlyOptions.stateDirectory),
     };
     this.options = options;
+    if (options.workspace)
+      assertWorkspaceSeparation(
+        options.workspace.repository,
+        options.stateDirectory,
+        options.runtimeHome,
+      );
     this.store = new Store(join(options.stateDirectory, "business.sqlite"));
-    this.runtime =
-      runtime ??
-      new CodexRuntime({
-        home: options.runtimeHome,
-        expectedVersion: options.expectedVersion,
-        ...(options.executable ? { executable: options.executable } : {}),
-        ...(options.credential ? { credential: options.credential } : {}),
-      });
+    try {
+      this.workspace = options.workspace
+        ? new WorkspaceBroker(options.stateDirectory, options.workspace, (id) =>
+            this.store.agent(id),
+          )
+        : undefined;
+      this.runtime =
+        runtime ??
+        new CodexRuntime({
+          home: options.runtimeHome,
+          expectedVersion: options.expectedVersion,
+          ...(options.executable ? { executable: options.executable } : {}),
+          ...(options.credential ? { credential: options.credential } : {}),
+        });
+    } catch (error) {
+      this.store.close();
+      throw error;
+    }
     this.runtime.onEvent = (event) => this.background(this.handleEvent(event));
     this.runtime.onRequest = (request) =>
       this.background(this.handleRequest(request));
@@ -207,6 +231,16 @@ export class Coordinator {
     limits: TreeLimits,
     requestKey?: string,
   ): Agent {
+    if (this.workspace && this.store.agents().length > 0) {
+      requireCondition(
+        requestKey &&
+          this.store.db
+            .prepare("SELECT agent_id FROM root_requests WHERE request_key=?")
+            .get(requestKey),
+        "CONFLICT",
+        "Coding state supports one Lead tree; reuse its request key or create a separate repository checkout for another team",
+      );
+    }
     const agent = this.store.createRoot(name, task, limits, requestKey);
     this.background(this.tick());
     return agent;
@@ -217,7 +251,10 @@ export class Coordinator {
     return id;
   }
   private cwd(agentId: string): string {
-    return join(this.options.stateDirectory, "workspaces", agentId);
+    return (
+      this.workspace?.cwd(this.store.agent(agentId)) ??
+      join(this.options.stateDirectory, "workspaces", agentId)
+    );
   }
   private async ensureBinding(agent: Agent) {
     if (this.store.binding(agent.id)) return;
@@ -227,8 +264,19 @@ export class Coordinator {
     // No Turn can start before binding commits. A lost creation ACK can leave only an empty orphan Thread.
     const thread = await this.runtime.createThread(
       cwd,
-      agentTools,
-      "Use the supplied Agent Tree tools for all delegation and communication. Caller identity and permissions are host-controlled. Do not invoke native subagents or run commands. For a delegation task, spawn once and end the initial Turn promptly; do not wait for a child result. On a message-triggered Turn, handle the delivered messages, send a report to your parent if appropriate, then agent_ack their IDs before finishing. A non-root leaf must report its result to its parent with agent_send before finishing. Reuse requestKey for the same logical action. Never invent a successful tool response.",
+      [
+        ...agentTools,
+        ...(this.workspace
+          ? workspaceTools(
+              agent.depth,
+              Object.keys(this.workspace.policy.tests),
+            )
+          : []),
+      ],
+      "Use the supplied Agent Tree tools for all delegation and communication. Caller identity and permissions are host-controlled. Do not invoke native subagents. Use only your supplied tools. Descendants cannot use terminal; Lead may use terminal only in coding mode. For a delegation task, spawn once and end the initial Turn promptly; do not wait for a child result. On a message-triggered Turn, handle the delivered messages, send a report to your parent if appropriate, then agent_ack their IDs before finishing. A non-root leaf must report its result to its parent with agent_send before finishing. Reuse requestKey for the same logical action. Never invent a successful tool response." +
+        (this.workspace
+          ? ` Coding workspace: ${cwd}. Level ${agent.depth + 1}. Second-level writes are isolated in a detached worktree based on ${this.workspace.policy.baseCommit}; report changed files and workspace path. Third-level Agents inspect their parent workspace read-only. A test result is not task completion. Lead must review patches before integrating them.`
+          : " This is a text-only team; do not run commands."),
     );
     this.store.bind(agent.id, thread, "default");
   }
@@ -581,7 +629,73 @@ export class Coordinator {
         turnId,
       });
       let output: unknown;
-      if (tool === "agent_task_create") {
+      if (
+        [
+          "read_file",
+          "write_file",
+          "search_code",
+          "git_diff",
+          "run_test",
+          "terminal",
+        ].includes(tool)
+      ) {
+        requireCondition(
+          this.workspace,
+          "FORBIDDEN",
+          "No coding workspace was authorized",
+        );
+        const agent = this.store.agent(actor.agentId);
+        requireCondition(
+          agent.desired === "active" && !this.store.runtimeBlock(agent.id),
+          "STATE_BLOCKED",
+          "Workspace capability blocked by lifecycle or reconciliation fence",
+        );
+        this.store.note(agent.id, "workspace.tool.started", {
+          tool,
+          nativeCallId: p.callId ?? null,
+          turnId,
+        });
+        requireCondition(
+          workspaceTools(
+            agent.depth,
+            Object.keys(this.workspace.policy.tests),
+          ).some((t) => t.name === tool),
+          "FORBIDDEN",
+          "Workspace tool is not granted at this level",
+        );
+        if (["terminal", "run_test"].includes(tool))
+          this.workspace.validateCommand(agent, tool, p.arguments);
+        const callId = protocolString(p.callId);
+        const command = ["run_test", "terminal"].includes(tool)
+          ? this.store.beginWorkspaceCommand(actor, callId, p.arguments)
+          : undefined;
+        if (command?.cached) output = command.result;
+        else {
+          output = await this.workspace.call(agent, tool, p.arguments);
+          if (["run_test", "terminal"].includes(tool))
+            this.store.finishWorkspaceCommand(agent.id, callId, output);
+        }
+        const result = output as Record<string, unknown>;
+        this.store.note(agent.id, "workspace.tool.completed", {
+          tool,
+          ...(tool === "write_file"
+            ? {
+                path: result.path,
+                hash: result.hash,
+                unchanged: result.unchanged,
+              }
+            : {}),
+          ...(["terminal", "run_test"].includes(tool)
+            ? {
+                exitCode: result.exitCode,
+                stopped: result.stopped,
+                truncated: result.truncated,
+              }
+            : {}),
+          nativeCallId: p.callId ?? null,
+          turnId,
+        });
+      } else if (tool === "agent_task_create") {
         output = this.store.tasks.create(actor, actor.agentId, p.arguments);
       } else if (tool === "agent_task_update") {
         output = this.store.tasks.update(actor, actor.agentId, p.arguments);
@@ -640,6 +754,7 @@ export class Coordinator {
           input.action,
           input.scope,
         );
+        this.cancelWorkspaceTests();
         await this.interrupt(attempts);
         output = this.status(input.target);
       } else throw new AgentTreeError("INVALID_INPUT", "Unknown Agent tool");
@@ -677,6 +792,16 @@ export class Coordinator {
     );
     return {
       ...agent,
+      workspace: this.workspace
+        ? {
+            level: agent.depth + 1,
+            terminal: agent.depth === 0,
+            write: agent.depth <= 1,
+            commands: this.store.workspaceCommands(agent.id),
+            commandSummary: this.store.workspaceCommandSummary(agent.id),
+          }
+        : null,
+      pendingUsageReceipts: this.store.pendingUsageReceipts(agentId),
       binding: this.store.binding(agentId) ?? null,
       runtimeBlock: this.store.runtimeBlock(agentId) ?? null,
       nativeObservation: this.store.sessionObservation(agentId) ?? null,
@@ -690,6 +815,7 @@ export class Coordinator {
           ...summary,
           inputSummary: input.slice(0, 160),
           accounting: this.store.accounting(a.id),
+          usageReceipts: this.store.usageReceipts(a.id),
         };
       }),
       messageCount: this.store.messages(agentId).length,
@@ -902,7 +1028,7 @@ export class Coordinator {
       "STATE_BLOCKED",
       "Matching terminal native Turn is required for settlement",
     );
-    this.store.settleFinalUsage(
+    this.store.submitUsageReceipt(
       attemptId,
       attempt.binding_generation,
       tokens,
@@ -947,9 +1073,16 @@ export class Coordinator {
     scope: "agent" | "subtree" = "subtree",
   ) {
     const attempts = this.store.control(null, target, action, scope);
+    if (action === "cancel" || action === "terminate")
+      this.cancelWorkspaceTests();
     await this.interrupt(attempts);
     await this.tick();
     return this.status(target);
+  }
+  private cancelWorkspaceTests() {
+    for (const agent of this.store.agents())
+      if (["cancelled", "terminated"].includes(agent.desired))
+        this.workspace?.cancel(agent.id);
   }
   private async interrupt(attempts: Attempt[]) {
     for (const snapshot of attempts) {
@@ -1109,6 +1242,7 @@ export class Coordinator {
     }
   }
   async stop(releaseBarrier?: Promise<void>) {
+    this.workspace?.cancel();
     // Observe rejections immediately while bounded in-flight RPC cleanup is still pending.
     const releaseOutcome = releaseBarrier?.then(
       () => ({ ok: true as const }),

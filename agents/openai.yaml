@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Agent Tree"
-  short_description: "Run persistent recursive Codex analysis teams"
-  default_prompt: "Use $codex-agent-tree to delegate this analysis to a small recursive team and collect its result."
+  short_description: "Run persistent recursive Codex teams"
+  default_prompt: "Use $codex-agent-tree to delegate this task to a small recursive team and collect its result."

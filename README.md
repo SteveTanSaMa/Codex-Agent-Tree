@@ -2,11 +2,11 @@
 
 简体中文 · [English](README.en.md)
 
-一个可安装的 Codex Skill：把提供的文本分析任务委派给可递归创建子节点的独立 Codex Session，持久保存消息、身份、预算和执行记录。关闭调用 CLI 后团队继续运行；消息能唤醒空闲节点，Coordinator 重启后先对账再调度。
+一个可安装的 Codex Skill：用独立、可恢复的 Codex Session 组成递归团队，支持消息唤醒、任务依赖、受控编码和故障对账。
 
-**当前版本 `0.1.0-alpha.4`：仅验证 macOS arm64、Node ≥26.3.1、`codex-cli 0.162.0-alpha.17.2`，单凭据域、只读任务。** 团队内禁用 shell，不支持读取调用者仓库、并发写代码或自动合并。应把相关文本放进任务。Skill 的当前对话负责操作团队；团队 Root 是另一个独立 Session。
+**`0.1.0-beta.1`：面向 macOS arm64、Node ≥26.3.1、精确版本 `codex-cli 0.162.0-alpha.17.2`，单凭据域。** 默认仍是文本分析；显式选择 Git 仓库后，Lead 可使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
 
-当前 `main` 已包含尚未发布的用量重复计数修复（schema 7）与第三方凭据接入。alpha.4 ZIP 不含这些修复；升级前请停止并备份 state。详见[用量核算](docs/usage-reconciliation.md)和[第三方配置](references/operations.md#third-party-provider-configuration)。
+Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。升级会迁移至 schema 8，请先停止并备份完整 state；已有只读团队不自动获得新权限。
 
 ## 安装
 
@@ -34,7 +34,7 @@ node "$SKILL_DIR/scripts/cat.mjs" setup
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[alpha Release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-alpha.4) 提供同一套自包含 Skill，不包含依赖缓存或登录状态，解压后同样运行 `setup`。
+`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[Beta Release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.1) 提供同一套自包含 Skill，不包含依赖缓存或登录状态，解压后同样运行 `setup`。
 
 ## 使用
 
@@ -70,6 +70,27 @@ node "$SKILL_DIR/scripts/cat.mjs" start
 
 暂停默认覆盖子树并 drain 活 Turn，消息仍排队；`--scope agent` 仅作用单节点。`cancel` 请求中断，`terminate` 永久终止。`stop` 只关闭 Coordinator，保留专用官方 daemon 与已接受工作。恢复、完整停机、未知执行和结算见 [操作说明](references/operations.md)。
 
+## 编码团队
+
+为新团队显式选择干净且已提交的仓库；state 和 runtime home 必须在仓库外：
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" init --state "$HOME/.cat/code-team" --runtime-home "$HOME/.cat/code-runtime" --workspace /absolute/path/repository --test-commands /absolute/path/tests.json
+node "$SKILL_DIR/scripts/cat.mjs" start --state "$HOME/.cat/code-team"
+```
+
+`tests.json` 由操作者定义固定的绝对可执行文件和参数，例如 `{"unit":{"executable":"/opt/homebrew/bin/node","args":["--test","test/sum.test.mjs"]}}`。不需要子节点运行测试时可省略 `--test-commands`。
+
+| 层级 | 文件能力 | 命令能力 |
+| --- | --- | --- |
+| 一级 Lead | 选定仓库读写，审核并集成补丁 | 宿主提供的 `terminal`：命令、测试、本地 Git 操作 |
+| 二级 | 独立 detached worktree 读写 | 仅 `run_test` 白名单；没有通用 shell |
+| 三级及以下 | 读取父级工作树、搜索、diff | 没有 terminal 或测试执行权限 |
+
+受限工具为 `read_file`、`write_file`（哈希冲突校验）、`search_code`、`git_diff`、`run_test`。层级限制由宿主检查，隐藏工具即使被直接请求也不能越权。命令经过 macOS 沙箱，禁止联网，写入限自己的工作区，超时 30 秒，输出上限 64 KiB。Lead 与子节点命令均有持久收据；不确定结果不会自动重放。
+
+每个 coding state 只支持一棵 Lead 树。二级工作树固定从初始化提交创建，不复制依赖、忽略文件或后续父级修改；不要让不同 Coordinator 同时编辑同一个 Lead 仓库。依赖较重的项目可由 Lead 在已有依赖的原仓库运行集成测试。用量不代表供应商账单，Beta 也没有证明多 Agent 比单 Agent 更省 token。完整操作与恢复规则见[编码说明](references/coding.md)。
+
 ## 执行限制
 
 默认硬限制为深度 2、累计 16 个 Agent、3 个并行 Turn、每 Agent 20 个 Turn、整棵树 100 个 Turn。可用 `--max-depth`、`--max-agents`、`--concurrent`、`--max-turns`、`--max-total-turns` 调整。成员结束不会退还累计数量；失败、中断及已准备后取消的 Turn 仍计数，重启不清零。达到上限不再接纳新工作，已接纳的工作继续收尾。
@@ -90,7 +111,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` 统一返回 Agent、任务摘要、预算、消息计数和阻塞原因。用其 cursor 调用 `wait`，之后用每次响应的顶层 cursor 续读，`hasMore` 表示还有事件页。`noProgress` 需要检查输入、fence、预算或未知执行，并非团队完成；等待不占用托管 Turn。详细动作、权限和输入文件格式见 [操作说明](references/operations.md)。
 
-升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。alpha.4 会将数据库迁移到 schema 6，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
+升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 会将数据库迁移到 schema 8，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
 
 ## 开发与验证
 
