@@ -156,6 +156,8 @@ async function serve() {
   };
   const server = createServer((socket) => {
     connections.add(socket);
+    const abandoned = new AbortController();
+    socket.once("close", () => abandoned.abort());
     socket.once("close", () => connections.delete(socket));
     let buffer = "";
     socket.setTimeout(10000, () => socket.destroy());
@@ -187,6 +189,39 @@ async function serve() {
           const p = record(input.params);
           let result: unknown;
           if (input.method === "ping") result = coordinator.diagnostics();
+          else if (input.method === "view")
+            result = coordinator.view(text(p.target, "target", 256));
+          else if (input.method === "wait") {
+            socket.setTimeout(0); // Coordinator owns a bounded deadline and disconnect cancellation.
+            result = await coordinator.wait(
+              text(p.target, "target", 256),
+              integer(p.after as number, "after cursor"),
+              integer(p.timeoutMs as number, "timeoutMs"),
+              abandoned.signal,
+            );
+          } else if (input.method === "task-create")
+            result = coordinator.store.tasks.create(
+              null,
+              text(p.target, "target", 256),
+              p.input,
+            );
+          else if (input.method === "task-update")
+            result = coordinator.store.tasks.update(
+              null,
+              text(p.target, "target", 256),
+              p.input,
+            );
+          else if (input.method === "task-get")
+            result = coordinator.store.tasks.get(
+              null,
+              text(p.target, "target", 256),
+              text(p.taskId, "task ID", 256),
+            );
+          else if (input.method === "task-list")
+            result = coordinator.store.tasks.list(
+              null,
+              text(p.target, "target", 256),
+            );
           else if (input.method === "list")
             result = coordinator.store
               .agents()
@@ -417,6 +452,98 @@ try {
       );
     }
     console.log(JSON.stringify(root));
+  } else if (
+    command === "view" ||
+    command === "task-list" ||
+    command === "task-get"
+  ) {
+    console.log(
+      JSON.stringify(
+        await request(command, {
+          target: text(flag("target"), "target"),
+          ...(command === "task-get"
+            ? { taskId: text(flag("task-id"), "task ID") }
+            : {}),
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "wait") {
+    const timeoutMs = integer(Number(flag("timeout-ms", "25000")), "timeoutMs");
+    requireCondition(
+      timeoutMs <= 30000,
+      "INVALID_INPUT",
+      "Wait timeout must be at most 30000 ms",
+    );
+    console.log(
+      JSON.stringify(
+        await request(
+          "wait",
+          {
+            target: text(flag("target"), "target"),
+            after: integer(Number(flag("after", "0")), "after cursor"),
+            timeoutMs,
+          },
+          timeoutMs + 5000,
+        ),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "task-create" || command === "task-update") {
+    const inputFile = flag("input-file");
+    const input: unknown = inputFile
+      ? JSON.parse(readFileSync(inputFile, "utf8"))
+      : {
+          requestKey: text(flag("key"), "request key", 128),
+          ...(command === "task-create"
+            ? {
+                subject: text(flag("subject"), "task subject", 200),
+                description: text(
+                  flag("description"),
+                  "task description",
+                  8000,
+                ),
+              }
+            : {
+                taskId: text(flag("task-id"), "task ID", 256),
+                expectedRevision: integer(
+                  Number(flag("revision")),
+                  "revision",
+                  1,
+                ),
+                action: text(flag("action"), "task action", 32),
+              }),
+          ...(flag("subject") && command === "task-update"
+            ? { subject: flag("subject") }
+            : {}),
+          ...(flag("description") && command === "task-update"
+            ? { description: flag("description") }
+            : {}),
+          ...(flag("blocked-by") === undefined
+            ? {}
+            : { blockedBy: JSON.parse(flag("blocked-by")!) }),
+          ...(flag("write-scopes") === undefined
+            ? {}
+            : { writeScopes: JSON.parse(flag("write-scopes")!) }),
+          ...(flag("owner-id") === undefined
+            ? {}
+            : {
+                ownerId: flag("owner-id") === "null" ? null : flag("owner-id"),
+              }),
+          ...(flag("result") === undefined ? {} : { result: flag("result") }),
+        };
+    console.log(
+      JSON.stringify(
+        await request(command, {
+          target: text(flag("target"), "target"),
+          input,
+        }),
+        null,
+        2,
+      ),
+    );
   } else if (command === "tree" || command === "list")
     console.log(JSON.stringify(await request("list"), null, 2));
   else if (command === "status")
@@ -494,7 +621,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init, start, serve, root --task TEXT, tree, status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. All accept --state DIR.",
+      "Commands: init, start, serve, root --task TEXT, tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

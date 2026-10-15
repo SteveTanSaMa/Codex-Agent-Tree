@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { requireCondition, text, integer } from "../core/errors.ts";
+import { TaskBoard } from "./task-board.ts";
 
 type Row = Record<string, unknown>;
 export type DesiredState = "active" | "paused" | "cancelled" | "terminated";
@@ -99,6 +100,8 @@ export class Store {
   readonly db: DatabaseSync;
   readonly ownerId = randomUUID();
   readonly generation: number;
+  readonly tasks: TaskBoard;
+  private commitWaiters = new Set<() => void>();
   private closed = false;
   private runtimeGeneration = 0;
   constructor(path: string) {
@@ -138,9 +141,13 @@ export class Store {
         CREATE UNIQUE INDEX IF NOT EXISTS active_agent_attempt ON turn_attempts(agent_id) WHERE state IN ${activeAttempts};
         CREATE UNIQUE INDEX IF NOT EXISTS native_turn ON turn_attempts(thread_id,turn_id) WHERE turn_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, tree_id TEXT, agent_id TEXT, attempt_id TEXT, kind TEXT NOT NULL, owner_generation INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, tree_id TEXT NOT NULL REFERENCES trees(id), created_by TEXT NOT NULL REFERENCES agents(id), owner_id TEXT REFERENCES agents(id), revision INTEGER NOT NULL CHECK(revision>=1), status TEXT NOT NULL CHECK(status IN ('pending','in_progress','completed','deleted')), subject TEXT NOT NULL, description TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS task_dependencies(task_id TEXT NOT NULL REFERENCES tasks(id), depends_on TEXT NOT NULL REFERENCES tasks(id), PRIMARY KEY(task_id,depends_on));
+        CREATE TABLE IF NOT EXISTS task_scopes(task_id TEXT NOT NULL REFERENCES tasks(id), scope TEXT NOT NULL, PRIMARY KEY(task_id,scope));
+        CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4].includes(
+        [1, 2, 3, 4, 5].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -193,7 +200,7 @@ export class Store {
           );
         }
       }
-      this.run("UPDATE schema_version SET version=4");
+      this.run("UPDATE schema_version SET version=5");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -222,6 +229,14 @@ export class Store {
       this.db.close();
       throw error;
     }
+    this.tasks = new TaskBoard({
+      db: this.db,
+      transact: (operation) => this.transaction(operation),
+      agent: (id) => this.agent(id),
+      authenticate: (actor) => this.actor(actor),
+      subtree: (id) => this.subtree(id),
+      event: (agent, kind, body) => this.event(agent, kind, body),
+    });
   }
   private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
     return this.db.prepare(sql).get(...params) as Row | undefined;
@@ -244,8 +259,11 @@ export class Store {
         "STALE_OWNER",
         "Coordinator generation no longer owns state",
       );
+      const before = this.eventCursor();
       const result = fn();
+      const changed = this.eventCursor() !== before;
       this.db.exec("COMMIT");
+      if (changed) for (const resolve of [...this.commitWaiters]) resolve();
       return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -1507,6 +1525,35 @@ export class Store {
       agentId,
     );
   }
+  eventCursor(treeId?: string): number {
+    return Number(
+      this.one(
+        `SELECT MAX(sequence) AS n FROM events${treeId ? " WHERE tree_id=?" : ""}`,
+        ...(treeId ? [treeId] : []),
+      )?.n ?? 0,
+    );
+  }
+  eventPage(treeId: string, after: number): Row[] {
+    return this.all(
+      "SELECT sequence,kind,agent_id,attempt_id,created_at FROM events WHERE tree_id=? AND sequence>? ORDER BY sequence LIMIT 100",
+      treeId,
+      after,
+    );
+  }
+  waitForCommit(signal: AbortSignal): Promise<void> {
+    requireCondition(!this.closed, "STALE_OWNER", "Store is closed");
+    signal.throwIfAborted();
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        this.commitWaiters.delete(finish);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      this.commitWaiters.add(finish);
+      signal.addEventListener("abort", finish, { once: true });
+      if (signal.aborted) finish();
+    });
+  }
   close() {
     if (this.closed) return;
     try {
@@ -1518,6 +1565,7 @@ export class Store {
       });
     } finally {
       this.closed = true;
+      for (const resolve of [...this.commitWaiters]) resolve();
       this.db.close();
     }
   }

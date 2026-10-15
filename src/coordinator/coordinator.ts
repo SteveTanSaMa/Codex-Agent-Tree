@@ -7,7 +7,7 @@ import {
   type Actor,
   type TreeLimits,
 } from "../storage/store.ts";
-import { AgentTreeError, requireCondition } from "../core/errors.ts";
+import { AgentTreeError, requireCondition, integer } from "../core/errors.ts";
 import {
   CodexRuntime,
   record,
@@ -23,6 +23,7 @@ import {
   statusInput,
   listInput,
   controlInput,
+  getTaskInput,
 } from "../tools/inputs.ts";
 
 export type RuntimePort = Pick<
@@ -122,6 +123,7 @@ export class Coordinator {
   private completionRecovery = new Set<string>();
   private ready = false;
   private stopping = false;
+  private waitStop = new AbortController();
   private jobs = new Set<Promise<void>>();
   private errors: { code: string; message: string }[] = [];
   constructor(readonlyOptions: CoordinatorOptions, runtime?: RuntimePort) {
@@ -553,7 +555,20 @@ export class Coordinator {
         turnId,
       });
       let output: unknown;
-      if (tool === "agent_spawn") {
+      if (tool === "agent_task_create") {
+        output = this.store.tasks.create(actor, actor.agentId, p.arguments);
+      } else if (tool === "agent_task_update") {
+        output = this.store.tasks.update(actor, actor.agentId, p.arguments);
+      } else if (tool === "agent_task_get") {
+        output = this.store.tasks.get(
+          actor,
+          actor.agentId,
+          getTaskInput(p.arguments),
+        );
+      } else if (tool === "agent_task_list") {
+        listInput(p.arguments);
+        output = this.store.tasks.list(actor, actor.agentId);
+      } else if (tool === "agent_spawn") {
         const { requestKey, ...input } = spawnInput(p.arguments);
         const child = this.store.spawn(actor, requestKey, input);
         output = {
@@ -656,6 +671,171 @@ export class Coordinator {
         .slice(-50)
         .map((m) => ({ ...m, body: m.body.slice(0, 2000) })),
     };
+  }
+  view(target: string) {
+    const treeId = this.store.agent(target).tree_id;
+    const limits = this.store.limits(treeId);
+    const budget = this.store.budgetStatus(treeId);
+    const reasons: { agentId: string | null; code: string }[] = [];
+    let progressPossible = false;
+    const agents = this.store.agents(treeId).map((agent) => {
+      const attempts = this.store.attempts(agent.id);
+      const active = attempts.find((a) =>
+        ["prepared", "starting", "running", "unknown"].includes(a.state),
+      );
+      const messages = this.store.messages(agent.id);
+      const queued = messages.filter((m) => m.status === "queued").length;
+      const block = this.store.runtimeBlock(agent.id);
+      if (agent.desired !== "active")
+        reasons.push({ agentId: agent.id, code: agent.desired });
+      if (block) reasons.push({ agentId: agent.id, code: "quarantined" });
+      if (active?.state === "unknown")
+        reasons.push({ agentId: agent.id, code: "unknown-execution" });
+      if (active && ["starting", "running"].includes(active.state))
+        progressPossible = true;
+      const hasWork =
+        queued > 0 || agent.turns === 0 || active?.state === "prepared";
+      if (hasWork) {
+        const exhausted =
+          !active &&
+          (agent.turns >= limits.maxTurnsPerAgent ||
+            agent.capacity - agent.spent - agent.reserved <
+              limits.turnReservation);
+        if (exhausted) reasons.push({ agentId: agent.id, code: "agent-limit" });
+        if (
+          agent.desired === "active" &&
+          !block &&
+          active?.state !== "unknown" &&
+          !exhausted &&
+          (active?.state === "prepared" ||
+            (budget.availableTokens >= limits.turnReservation &&
+              !budget.unknownUsageAttempts.length))
+        )
+          progressPossible = true;
+      }
+      const binding = this.store.binding(agent.id);
+      return {
+        id: agent.id,
+        parentId: agent.parent_id,
+        name: agent.name,
+        depth: agent.depth,
+        desired: agent.desired,
+        execution: active?.state ?? (agent.turns ? "idle" : "initializing"),
+        threadId: binding?.thread_id ?? null,
+        bindingGeneration: binding?.generation ?? null,
+        attemptCount: attempts.length,
+        latestAttemptId: attempts.at(-1)?.id ?? null,
+        resultPreview: attempts.at(-1)?.result?.slice(0, 1000) ?? null,
+        messages: {
+          queued,
+          uncertain: messages.filter((m) => m.status === "unknown").length,
+          rejected: messages.filter((m) => m.status === "rejected").length,
+          processed: messages.filter((m) => m.status === "processed").length,
+        },
+      };
+    });
+    if (!this.ready) {
+      progressPossible = false;
+      reasons.push({ agentId: null, code: "runtime-not-ready" });
+    }
+    if (budget.unknownUsageAttempts.length)
+      reasons.push({ agentId: null, code: "unknown-usage" });
+    if (
+      budget.excessLiabilityTokens > 0 ||
+      budget.availableTokens < limits.turnReservation
+    )
+      reasons.push({ agentId: null, code: "tree-budget" });
+    const tasks = this.store.tasks.list(null, target);
+    if (!progressPossible)
+      reasons.push({
+        agentId: null,
+        code: tasks.some((t) => t.status !== "completed")
+          ? "tasks-require-explicit-input"
+          : "quiescent",
+      });
+    return {
+      treeId,
+      cursor: this.store.eventCursor(treeId),
+      agents,
+      tasks,
+      budget,
+      progressPossible,
+      reasons,
+      taskCompletionIsExplicit: true,
+    };
+  }
+  async wait(
+    target: string,
+    after: number,
+    timeoutMs = 25000,
+    signal?: AbortSignal,
+  ) {
+    integer(after, "after cursor");
+    integer(timeoutMs, "timeoutMs");
+    requireCondition(
+      timeoutMs <= 30000,
+      "INVALID_INPUT",
+      "Wait timeout must be at most 30000 ms",
+    );
+    requireCondition(
+      after <= this.store.eventCursor(),
+      "CONFLICT",
+      "Cursor is ahead of this database; resync with view",
+    );
+    const treeId = this.store.agent(target).tree_id;
+    const timeout = new AbortController();
+    const combined = AbortSignal.any([
+      timeout.signal,
+      this.waitStop.signal,
+      ...(signal ? [signal] : []),
+    ]);
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    try {
+      for (;;) {
+        signal?.throwIfAborted();
+        if (this.waitStop.signal.aborted)
+          return {
+            reason: "stopped",
+            cursor: after,
+            hasMore: false,
+            events: [],
+            view: null,
+          };
+        const events = this.store.eventPage(treeId, after);
+        const view = this.view(target);
+        if (events.length) {
+          const cursor = Number(events.at(-1)!.sequence);
+          return {
+            reason: "changed",
+            cursor,
+            hasMore: cursor < view.cursor,
+            events,
+            view,
+          };
+        }
+        if (!view.progressPossible)
+          return {
+            reason: "noProgress",
+            cursor: after,
+            hasMore: false,
+            events: [],
+            view,
+          };
+        if (timeout.signal.aborted || timeoutMs === 0)
+          return {
+            reason: "timedOut",
+            cursor: after,
+            hasMore: false,
+            events: [],
+            view,
+          };
+        // No await between the durable cursor check and waiter registration.
+        // Only committed events wake this promise; unrelated trees are rechecked.
+        await this.store.waitForCommit(combined);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
   async nativeHistory(agentId: string) {
     const binding = this.store.binding(agentId);
@@ -905,6 +1085,7 @@ export class Coordinator {
       return;
     }
     this.stopping = true;
+    this.waitStop.abort();
     this.ready = false;
     this.runtime.disconnect();
     // No new dispatch; in-flight RPCs are bounded. A detached native daemon keeps existing Turns.

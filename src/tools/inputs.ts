@@ -1,5 +1,10 @@
 import { requireCondition, integer, text } from "../core/errors.ts";
 import type { DynamicTool } from "../runtime/codex/adapter.ts";
+export {
+  createTaskInput,
+  updateTaskInput,
+  getTaskInput,
+} from "../core/tasks.ts";
 
 function object(value: unknown, allowed: string[]): Record<string, unknown> {
   requireCondition(
@@ -99,6 +104,59 @@ function tool(
   };
 }
 export const agentTools: DynamicTool[] = [
+  tool(
+    "agent_task_create",
+    "Create an unowned persistent task in your tree. Use a stable requestKey for retries. Dependencies must complete before claim; ready never dispatches an Agent automatically.",
+    {
+      requestKey: string,
+      subject: string,
+      description: string,
+      blockedBy: { type: "array", items: string, maxItems: 32 },
+      writeScopes: { type: "array", items: string, maxItems: 16 },
+    },
+    ["requestKey", "subject", "description"],
+  ),
+  tool(
+    "agent_task_get",
+    "Read a task and its full result, owner, revision and dependencies in your tree, including deleted tombstones.",
+    { taskId: string },
+    ["taskId"],
+  ),
+  tool(
+    "agent_task_list",
+    "Read compact task summaries in your tree. Use agent_task_get for full input and result. Processed messages and idle Agents do not imply completed tasks.",
+    {},
+    [],
+  ),
+  tool(
+    "agent_task_update",
+    "Explicitly claim, release, edit, change dependencies, complete with a result, reopen, assign or delete a task. Supply the current expectedRevision and a stable requestKey; on a lost reply retry identical input/key. Assign/mutate owned work only within your management authority. No action wakes an Agent or bypasses budgets and human fences.",
+    {
+      taskId: string,
+      requestKey: string,
+      expectedRevision: { type: "integer", minimum: 1 },
+      action: {
+        type: "string",
+        enum: [
+          "claim",
+          "release",
+          "edit",
+          "set_dependencies",
+          "complete",
+          "reopen",
+          "assign",
+          "delete",
+        ],
+      },
+      subject: string,
+      description: string,
+      blockedBy: { type: "array", items: string, maxItems: 32 },
+      writeScopes: { type: "array", items: string, maxItems: 16 },
+      ownerId: { type: ["string", "null"] },
+      result: string,
+    },
+    ["taskId", "requestKey", "expectedRevision", "action"],
+  ),
   tool(
     "agent_spawn",
     "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Budget is transferred from your own allocation. Accepted creation may still be initializing.",

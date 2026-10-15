@@ -1,6 +1,6 @@
 ---
 name: codex-agent-tree
-description: Run durable, recursive Codex teams for analysis of supplied text, with independent sessions, persistent messages, token budgets, and pause/resume. Use when the user wants an asynchronous agent tree or wants to inspect or control an existing team.
+description: Run durable, recursive Codex analysis teams with independent sessions, persistent messages, explicit tasks and dependencies, token budgets, and event waiting. Use when the user wants an asynchronous agent tree or wants to inspect, coordinate, or control an existing team.
 ---
 
 # Codex Agent Tree
@@ -40,7 +40,30 @@ node "$SKILL_DIR/scripts/cat.mjs" status --state "$STATE" --target ROOT_ID
 
 Keep the returned stable Root ID and request key. Retry an uncertain submission with the **same key and identical content**, after inspecting existing state. A different task requires a different key.
 
-`status` returns `attempts[].result`, binding/Thread IDs, messages, budget, and errors. An idle Root or the Root's first delegation response is not a finished team. Check descendants and queued messages in `tree`, then read the Root's synthesis after its result message Turn completes. Poll at a reasonable interval (e.g. five seconds), in bounded calls; on timeout, report the Root ID and current progress without claiming success or submitting a duplicate team. Continue monitoring when the user wants the completed result. For background-only requests, return the Root ID and query command once accepted.
+`status` returns `attempts[].result`, binding/Thread IDs, messages, budget, and errors. An idle Root or the Root's first delegation response is not a finished team. Check descendants and queued messages, then read the Root's synthesis after its result message Turn completes. Prefer the compact `view` and cursor-based `wait` below to repeated status polling. On timeout, report current progress without claiming success or submitting a duplicate team. Continue monitoring when the user wants the completed result. For background-only requests, return the Root ID and query command once accepted.
+
+## Explicit tasks and dependencies
+
+Task tools add model round trips and repeated context usage, including cached input in native totals. Plan a sufficient pool before creating the team: the three-node, two-task acceptance workflow uses `--tokens 600000`, with 300000 allocated to B and 120000 from B to C. The CLI default stays 200000; do not increase or bypass a live pool to force completion.
+
+For delegated work with completion criteria, ask the managed Root to create tasks using `agent_task_create`, passing a stable `requestKey`, `subject`, `description`, and optional `blockedBy` task IDs. For example, create a calculation task and a verification task blocked by that calculation. Include task IDs and expected outputs in child assignments.
+
+Members use `agent_task_get` / `agent_task_list`, then `agent_task_update` with `taskId`, `requestKey`, current `expectedRevision`, and an action. `claim` takes ready unowned work; `complete` explicitly supplies a nonempty `result`. Use a fresh operation key for each logical mutation, but retry an uncertain mutation with identical fields/key/revision. A replay returns the original response; get the task again for current state. On `STALE_REVISION`, read current state and decide whether the intended change still applies before using a new key.
+
+Tasks do not start models. A member still ends its delegation Turn and reports actual results through `agent_send`; `agent_ack` consumes messages. For a finished task-board workflow, verify required tasks are explicitly completed and inspect full results with `agent_task_get` or operator `task-get`. Completion is an authorized assertion with a result, not automatic quality validation. Other actions and operator commands are documented in [operations](references/operations.md).
+
+New task tools are registered on newly created native Threads. Existing teams retain their original native tool catalog and can continue the old message workflow; the operator CLI can manage their tasks. Do not replace an existing binding merely to add tools.
+
+## Wait for progress
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" view --state "$STATE" --target ROOT_ID
+node "$SKILL_DIR/scripts/cat.mjs" wait --state "$STATE" --target ROOT_ID --after CURSOR --timeout-ms 25000
+```
+
+Take `CURSOR` from `view.cursor`, then from each wait response's **top-level** `cursor`. `changed` includes event metadata and the latest view; `hasMore` means read the next page using that cursor. `timedOut` means keep waiting if the user wants completion. `noProgress` means inspect `view.reasons`, task owners, fences, budget and unknown work; send needed input only within the user's task and with a stable message key. Do not repeatedly wait on an idle team or bypass a pause. `stopped` means the Coordinator is stopping. A cursor ahead of the database requires a fresh `view`.
+
+Waiting is for the operator; do not instruct managed Agents to hold their native Turns open while waiting for children. A ready task or an idle team does not itself prove the objective completed.
 
 If a Turn is `unknown`, quarantined, failed, or has unsettled cost, inspect `status`, `events`, and `native-history`. Do not replay work, clear a quarantine, or invent a final usage amount to make progress. Read [operations](references/operations.md) for recovery and accounting.
 

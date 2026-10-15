@@ -9,7 +9,7 @@ Codex 对话 → Skill CLI → 本地认证 socket → Coordinator ↔ 业务 SQ
                                   Thread A / B / C
 ```
 
-稳定业务 `agent_id` 独立于 `thread_id`；绑定记录递增 `binding_generation`，连接另有 generation。Agent 是身份，Thread 是上下文，Turn 是调度单位。管理关系是树，通信可跨层；当前没有完整任务 DAG。
+稳定业务 `agent_id` 独立于 `thread_id`；绑定记录递增 `binding_generation`，连接另有 generation。Agent 是身份，Thread 是上下文，Turn 是调度单位。管理关系是树，通信可跨层；另有轻量 Task 依赖板，采用显式完成、CAS 和幂等操作；依赖就绪不自动派发模型。
 
 选择维护这层 Coordinator，是因为身份、授权、预算转移、控制 fence、消息消费与派发意图需要共享业务事务和 ownership。候选上层编排器也能完成 nominal 递归，保守 unknown guard 可小幅补齐；最终取舍在这些新增状态的事务与恢复接入成本。不把未测试项当作候选失败，不宣称成本全局最优。若未来已有项目覆盖这些语义，应重评薄扩展。
 
@@ -28,4 +28,4 @@ Codex 对话 → Skill CLI → 本地认证 socket → Coordinator ↔ 业务 SQ
 
 ## 后续决策门槛
 
-限定 MVP 已验证真实递归、消息唤醒、退出续跑和明确故障注入点恢复。并发编码/worktree、完整 DAG、交互审批和多机不在范围。扩展前需对比单 Agent 与团队：固定任务/输入/质量评分，记录时间、总 tokens、成功率、人工介入次数；尚无数据证明团队普遍更好或更便宜。
+限定 MVP 已验证真实递归、消息唤醒、退出续跑和明确故障注入点恢复。并发编码/worktree、自动 DAG 执行、交互审批和多机不在范围。扩展前需对比单 Agent 与团队：固定任务/输入/质量评分，记录时间、总 tokens、成功率、人工介入次数；尚无数据证明团队普遍更好或更便宜。

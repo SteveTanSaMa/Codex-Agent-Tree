@@ -7,6 +7,7 @@ export type ErrorCode =
   | "OWNER_ACTIVE"
   | "STALE_OWNER"
   | "STALE_BINDING"
+  | "STALE_REVISION"
   | "STATE_BLOCKED";
 export class AgentTreeError extends Error {
   readonly code: ErrorCode;
