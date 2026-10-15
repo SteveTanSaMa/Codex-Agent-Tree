@@ -1,0 +1,22 @@
+node_modules/
+.cat-state/
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+.DS_Store
+
+__pycache__/
+
+# Local research archives and generated evidence are not distribution inputs.
+docs/research/
+docs/development/
+scripts/m0/
+scripts/verification/
+.artifacts/
+dist/
+.env.*
+auth.json
+operator-token
+*.sock

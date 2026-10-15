@@ -1,0 +1,11 @@
+Codex Agent Tree
+
+This distribution contains a modified Stoneforge JSON-RPC transport.
+See src/runtime/codex/vendor/README.md for the pinned source and modification notice.
+The upstream notice is retained below and in the vendor directory.
+
+Stoneforge
+Copyright 2026 Adam King
+
+This product includes software developed by Adam King.
+Third-party components are subject to their respective licenses.

@@ -1,0 +1,32 @@
+{
+  "name": "codex-agent-tree",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.3.1"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:integration": "node --test test/integration/*.test.ts",
+    "test:unit": "node --test test/unit/*.test.ts",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:fault": "node --test test/fault/*.test.ts",
+    "test:native": "CAT_TEST_NATIVE=1 node --test --test-concurrency=1 test/integration/*native.test.ts",
+    "test:real": "CAT_TEST_REAL=1 node --test --test-concurrency=1 test/real/*.test.ts",
+    "cat": "node src/cli/main.ts",
+    "skill": "node scripts/cat.mjs",
+    "package:skill": "python3 scripts/package-skill.py",
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts' 'scripts/*.mjs' 'examples/**/*.ts' 'examples/**/*.md' package.json tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/ws": "8.18.2",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "license": "Apache-2.0"
+}
