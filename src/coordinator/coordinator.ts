@@ -16,6 +16,8 @@ import {
   type TreeLimits,
 } from "../storage/store.ts";
 import { AgentTreeError, requireCondition, integer } from "../core/errors.ts";
+import { RpcFailure } from "../runtime/codex/vendor/jsonrpc-client.ts";
+import type { InteractionPolicy } from "../storage/interaction.ts";
 import {
   CodexRuntime,
   record,
@@ -51,7 +53,8 @@ export type RuntimePort = Pick<
   | "readThread"
   | "startTurn"
   | "interrupt"
->;
+> &
+  Partial<Pick<CodexRuntime, "steerTurn">>;
 export interface CoordinatorOptions {
   stateDirectory: string;
   runtimeHome: string;
@@ -138,6 +141,8 @@ export class Coordinator {
   private waitStop = new AbortController();
   private jobs = new Set<Promise<void>>();
   private errors: { code: string; message: string }[] = [];
+  private guardTimer: ReturnType<typeof setInterval> | undefined;
+  private checkingGuards = false;
   constructor(readonlyOptions: CoordinatorOptions, runtime?: RuntimePort) {
     const options = {
       ...readonlyOptions,
@@ -152,6 +157,14 @@ export class Coordinator {
           options.stateDirectory,
           options.runtimeHome,
         );
+    for (const resource of Object.values(
+      options.workspace?.readOnlyResources ?? {},
+    ))
+      assertWorkspaceSeparation(
+        resource,
+        options.stateDirectory,
+        options.runtimeHome,
+      );
     this.store = new Store(join(options.stateDirectory, "business.sqlite"));
     try {
       this.store.configureWorkspace(options.workspace);
@@ -228,6 +241,11 @@ export class Coordinator {
       await this.reconcile();
       this.ready = true;
       await this.tick();
+      this.guardTimer = setInterval(
+        () => this.background(this.checkProtections()),
+        1000,
+      );
+      this.guardTimer.unref();
     } catch (error) {
       await this.stop();
       throw error;
@@ -238,6 +256,7 @@ export class Coordinator {
     task: string,
     limits: TreeLimits,
     requestKey?: string,
+    interaction?: InteractionPolicy,
   ): Agent {
     if (this.workspace && this.store.agents().length > 0) {
       requireCondition(
@@ -250,6 +269,8 @@ export class Coordinator {
       );
     }
     const agent = this.store.createRoot(name, task, limits, requestKey);
+    if (interaction && !this.store.interaction.policy(agent.id))
+      this.store.interaction.configure(agent.id, interaction);
     this.background(this.tick());
     return agent;
   }
@@ -257,6 +278,149 @@ export class Coordinator {
     const id = this.store.operatorSend(target, key, message);
     this.background(this.tick());
     return id;
+  }
+  async submitGuidance(
+    target: string,
+    key: string,
+    message: string,
+    mode: "auto" | "queue" | "steer" = "auto",
+  ) {
+    requireCondition(
+      ["auto", "queue", "steer"].includes(mode),
+      "INVALID_INPUT",
+      "Invalid delivery mode",
+    );
+    const id = this.store.operatorSend(target, key, message);
+    const g = this.store.interaction.register(target, id, mode);
+    if (g.state !== "pending")
+      return this.store.interaction
+        .guidance(target)
+        .find((g) => g.message_id === id)!;
+    const active = this.store
+      .attempts(target)
+      .find((a) =>
+        ["prepared", "starting", "running", "unknown"].includes(a.state),
+      );
+    const interactive =
+      this.store.interaction.policy(target)?.mode === "interactive";
+    const binding = this.store.binding(target);
+    if (
+      mode === "queue" ||
+      (mode === "auto" && !interactive) ||
+      !active ||
+      !this.runtime.steerTurn
+    ) {
+      this.store.interaction.settle(
+        id,
+        "deferred",
+        !this.runtime.steerTurn && active
+          ? "Runtime steering unavailable; queued for next Turn"
+          : "Queued for next Turn",
+      );
+      this.background(this.tick());
+    } else if (
+      active.state !== "running" ||
+      !active.turn_id ||
+      this.store.agent(target).desired !== "active"
+    ) {
+      // Starting/unknown/paused must not race a turn/start or lifecycle fence.
+      this.store.interaction.settle(
+        id,
+        "deferred",
+        "Current execution is not steerable; queued",
+      );
+    } else {
+      requireCondition(
+        binding?.thread_id === active.thread_id &&
+          binding.generation === active.binding_generation,
+        "STATE_BLOCKED",
+        "Stale guidance binding",
+      );
+      this.store.interaction.claim(id, active);
+      try {
+        const accepted = await this.runtime.steerTurn(
+          active.thread_id,
+          active.turn_id,
+          `${message}\nAcknowledge this guidance using agent_ack with ID ${id}.`,
+          id,
+        );
+        requireCondition(
+          accepted === active.turn_id,
+          "CONFLICT",
+          "Steering ACK differs from expected Turn",
+        );
+        this.store.interaction.settle(
+          id,
+          "delivered",
+          "Runtime accepted input; model compliance and task completion are not confirmed",
+        );
+        this.store.interaction.checkIn(target);
+      } catch (error) {
+        if (
+          error instanceof RpcFailure &&
+          (error.delivery === "not-sent" || error.rpcCode === -32601)
+        ) {
+          this.store.interaction.settle(
+            id,
+            "deferred",
+            "Not sent or method unsupported; queued for next Turn",
+          );
+          this.background(this.tick());
+        } else
+          this.store.interaction.settle(
+            id,
+            "unknown",
+            "Delivery could have been accepted; operator review required before replay",
+          );
+      }
+    }
+    return this.store.interaction
+      .guidance(target)
+      .find((g) => g.message_id === id)!;
+  }
+  async checkProtections(time = Date.now()) {
+    if (!this.ready || this.stopping || this.checkingGuards) return;
+    this.checkingGuards = true;
+    try {
+      for (const root of this.store
+        .agents()
+        .filter((a) => !a.parent_id && a.desired === "active")) {
+        const members = this.store.subtree(root.id);
+        const working = members.some(
+          (a) =>
+            (a.turns === 0 && a.desired === "active") ||
+            this.store
+              .attempts(a.id)
+              .some((t) =>
+                ["prepared", "starting", "running", "unknown"].includes(
+                  t.state,
+                ),
+              ) ||
+            this.store.messages(a.id).some((m) => m.status === "queued"),
+        );
+        const decision = this.store.interaction.evaluate(
+          root.id,
+          working,
+          this.store.budgetStatus(root.tree_id).observedTokens,
+          time,
+        );
+        if (working) this.store.interaction.stall(root.id, time);
+        if (decision.pause)
+          await this.control(root.id, "pause", "subtree", true);
+      }
+    } finally {
+      this.checkingGuards = false;
+    }
+  }
+  async resolveGuidance(
+    target: string,
+    id: string,
+    outcome: "delivered" | "retry-next",
+    reason: string,
+  ) {
+    this.store.interaction.resolve(target, id, outcome, reason);
+    await this.tick();
+    return this.status(target);
   }
   private cwd(agentId: string): string {
     return (
@@ -275,18 +439,24 @@ export class Coordinator {
       [
         ...agentTools,
         ...(this.workspace
-          ? workspaceTools(agent.depth, this.workspace.tests(agent))
+          ? workspaceTools(
+              agent.depth,
+              this.workspace.tests(agent),
+              !!Object.keys(this.workspace.policy.readOnlyResources ?? {})
+                .length,
+            )
           : []),
       ],
       "Use the supplied Agent Tree tools for all delegation and communication. Caller identity and permissions are host-controlled. Do not invoke native subagents. Use only your supplied tools. Descendants cannot use terminal; Lead may use terminal only in coding mode. For a delegation task, spawn once and end the initial Turn promptly; do not wait for a child result. On a message-triggered Turn, handle the delivered messages, send a report to your parent if appropriate, then agent_ack their IDs before finishing. A non-root leaf must report its result to its parent with agent_send before finishing. Reuse requestKey for the same logical action. Never invent a successful tool response." +
         (this.workspace
-          ? ` Coding workspace: ${cwd}. Level ${agent.depth + 1}. Use workspace_list for authorized repositories, fixed base commits and worktree owners. Tools accept repositoryId; omission selects your primary repository. Second-level Agents have isolated worktrees. Third-level Agents are read-only; inherit sees parent edits, isolated sees the registered base. Spawn may delegate a subset via repositoryIds with repositoryId as primary; second-level must be isolated. Report repository IDs, changed files and worktree paths. A test result is not task completion. Lead must review patches before integrating them.`
+          ? ` Coding workspace: ${cwd}. Level ${agent.depth + 1}. Use workspace_list for authorized repositories, fixed base commits, worktree owners and registered external read-only resources. Use list_resource/read_resource to inspect those resources; Lead terminal and approved tests may read them but cannot write them. Tools accept repositoryId; omission selects your primary repository. Second-level Agents have isolated worktrees. Third-level Agents are read-only; inherit sees parent edits, isolated sees the registered base. Spawn may delegate a subset via repositoryIds with repositoryId as primary; second-level must be isolated. Report repository IDs, changed files and worktree paths. A test result is not task completion. Lead must review patches before integrating them.`
           : " This is a text-only team; do not run commands."),
     );
     this.store.bind(agent.id, thread, "default");
   }
   private async tick() {
     if (!this.ready || this.stopping) return;
+    await this.checkProtections();
     this.tickRequested = true;
     if (this.ticking) return;
     this.ticking = true;
@@ -404,7 +574,8 @@ export class Coordinator {
               if (
                 ["cancelled", "terminated"].includes(
                   this.store.agent(current.agent_id).desired,
-                )
+                ) ||
+                this.store.interaction.mustInterrupt(current.agent_id)
               )
                 await this.interrupt([this.store.attempt(current.id)]);
             } catch (error) {
@@ -641,6 +812,8 @@ export class Coordinator {
       if (
         [
           "workspace_list",
+          "read_resource",
+          "list_resource",
           "read_file",
           "write_file",
           "search_code",
@@ -666,14 +839,17 @@ export class Coordinator {
         ).id;
         this.store.note(agent.id, "workspace.tool.started", {
           repositoryId,
+          resourceId: record(p.arguments).resourceId ?? null,
           tool,
           nativeCallId: p.callId ?? null,
           turnId,
         });
         requireCondition(
-          workspaceTools(agent.depth, this.workspace.tests(agent)).some(
-            (t) => t.name === tool,
-          ),
+          workspaceTools(
+            agent.depth,
+            this.workspace.tests(agent),
+            !!Object.keys(this.workspace.policy.readOnlyResources ?? {}).length,
+          ).some((t) => t.name === tool),
           "FORBIDDEN",
           "Workspace tool is not granted at this level",
         );
@@ -692,6 +868,7 @@ export class Coordinator {
         const result = output as Record<string, unknown>;
         this.store.note(agent.id, "workspace.tool.completed", {
           repositoryId,
+          resourceId: record(p.arguments).resourceId ?? null,
           tool,
           ...(tool === "write_file"
             ? {
@@ -773,6 +950,7 @@ export class Coordinator {
         await this.interrupt(attempts);
         output = this.status(input.target);
       } else throw new AgentTreeError("INVALID_INPUT", "Unknown Agent tool");
+      this.store.note(actor.agentId, "tool.completed", { tool });
       this.runtime.respond(request, {
         success: true,
         contentItems: [{ type: "inputText", text: JSON.stringify(output) }],
@@ -781,6 +959,7 @@ export class Coordinator {
     } catch (error) {
       if (actor)
         this.store.note(actor.agentId, "tool.rejected", {
+          tool: typeof p.tool === "string" ? p.tool : null,
           code: error instanceof AgentTreeError ? error.code : "TOOL_ERROR",
         });
       if (this.runtime.isCurrent(request.connectionGeneration))
@@ -822,7 +1001,12 @@ export class Coordinator {
       runtimeBlock: this.store.runtimeBlock(agentId) ?? null,
       nativeObservation: this.store.sessionObservation(agentId) ?? null,
       budget: this.store.budgetStatus(agent.tree_id),
+      tokenUsage: {
+        agent: this.store.reminders.summary(agentId, "agent"),
+        tree: this.store.reminders.summary(agentId, "tree"),
+      },
       executionLimits: this.store.executionStatus(agent.tree_id),
+      interaction: this.store.interaction.summary(agentId),
       execution: active?.state ?? (attempts.length ? "idle" : "initializing"),
       attemptCount: attempts.length,
       attempts: attempts.slice(-20).map((a) => {
@@ -856,6 +1040,11 @@ export class Coordinator {
       const messages = this.store.messages(agent.id);
       const queued = messages.filter((m) => m.status === "queued").length;
       const block = this.store.runtimeBlock(agent.id);
+      const unknownGuidance = this.store.interaction
+        .guidance(agent.id)
+        .some((g) => g.state === "unknown");
+      if (unknownGuidance)
+        reasons.push({ agentId: agent.id, code: "unknown-guidance" });
       if (agent.desired !== "active")
         reasons.push({ agentId: agent.id, code: agent.desired });
       if (block) reasons.push({ agentId: agent.id, code: "quarantined" });
@@ -868,7 +1057,8 @@ export class Coordinator {
       if (hasWork) {
         const exhausted =
           !active &&
-          (agent.turns >= limits.maxTurnsPerAgent ||
+          ((limits.maxTurnsPerAgent !== null &&
+            agent.turns >= limits.maxTurnsPerAgent) ||
             executionLimits.remainingTurns === 0 ||
             (budget.enforced &&
               agent.capacity - agent.spent - agent.reserved <
@@ -877,11 +1067,12 @@ export class Coordinator {
         if (
           agent.desired === "active" &&
           !block &&
+          !unknownGuidance &&
           active?.state !== "unknown" &&
           !exhausted &&
           (active?.state === "prepared" ||
             !budget.enforced ||
-            (budget.availableTokens >= limits.turnReservation &&
+            ((budget.availableTokens ?? 0) >= limits.turnReservation &&
               !budget.unknownUsageAttempts.length))
         )
           progressPossible = true;
@@ -916,7 +1107,7 @@ export class Coordinator {
     if (
       budget.enforced &&
       (budget.excessLiabilityTokens > 0 ||
-        budget.availableTokens < limits.turnReservation)
+        (budget.availableTokens ?? 0) < limits.turnReservation)
     )
       reasons.push({ agentId: null, code: "tree-budget" });
     if (executionLimits.remainingTurns === 0)
@@ -935,6 +1126,10 @@ export class Coordinator {
       agents,
       tasks,
       budget,
+      tokenUsage: {
+        agent: this.store.reminders.summary(target, "agent"),
+        tree: this.store.reminders.summary(target, "tree"),
+      },
       executionLimits,
       progressPossible,
       reasons,
@@ -1019,6 +1214,15 @@ export class Coordinator {
     requireCondition(binding, "STATE_BLOCKED", "No active binding");
     return this.runtime.readThread(binding.thread_id);
   }
+  setTurnLimits(
+    target: string,
+    patch: { maxTotalTurns?: number | null; maxTurnsPerAgent?: number | null },
+    reason: string,
+  ) {
+    const result = this.store.setTurnLimits(target, patch, reason);
+    this.background(this.tick());
+    return result;
+  }
   async settleUsage(attemptId: string, tokens: number, reason: string) {
     const attempt = this.store.attempt(attemptId);
     const history = await this.runtime.readThread(attempt.thread_id);
@@ -1087,8 +1291,26 @@ export class Coordinator {
     target: string,
     action: "pause" | "resume" | "cancel" | "terminate",
     scope: "agent" | "subtree" = "subtree",
+    immediate = false,
   ) {
-    const attempts = this.store.control(null, target, action, scope);
+    const attempts = this.store.control(null, target, action, scope, immediate);
+    if (action === "resume") {
+      this.store.interaction.checkIn(target);
+    }
+    if (action === "pause" && immediate) {
+      for (const a of scope === "subtree"
+        ? this.store.subtree(target)
+        : [this.store.agent(target)]) {
+        this.workspace?.cancel(a.id);
+        attempts.push(
+          ...this.store
+            .attempts(a.id)
+            .filter((t) =>
+              ["starting", "running", "unknown"].includes(t.state),
+            ),
+        );
+      }
+    }
     if (action === "cancel" || action === "terminate")
       this.cancelWorkspaceTests();
     await this.interrupt(attempts);
@@ -1193,7 +1415,8 @@ export class Coordinator {
             if (
               ["cancelled", "terminated"].includes(
                 this.store.agent(agent.id).desired,
-              )
+              ) ||
+              this.store.interaction.mustInterrupt(agent.id)
             )
               await this.interrupt([this.store.attempt(a.id)]);
             continue;
@@ -1270,6 +1493,7 @@ export class Coordinator {
       return;
     }
     this.stopping = true;
+    if (this.guardTimer) clearInterval(this.guardTimer);
     this.waitStop.abort();
     this.ready = false;
     this.runtime.disconnect();

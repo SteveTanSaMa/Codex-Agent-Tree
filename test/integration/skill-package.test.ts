@@ -45,6 +45,15 @@ test("packaged Skill runs outside the checkout and passes task text literally wi
     cpSync(join(root, "node_modules/ws"), join(installed, "node_modules/ws"), {
       recursive: true,
     });
+    const instructions = readFileSync(join(installed, "SKILL.md"), "utf8");
+    for (const match of instructions.matchAll(/\]\(([^)]+)\)/g)) {
+      const path = match[1]!.split("#")[0]!;
+      if (path && !path.includes(":"))
+        assert.doesNotThrow(
+          () => readFileSync(join(installed, path)),
+          `Missing packaged Skill reference: ${path}`,
+        );
+    }
     const task =
       'Review quoted "input"\n$(touch should-never-exist) `literal` $HOME';
     const taskFile = join(directory, "task with spaces.txt");

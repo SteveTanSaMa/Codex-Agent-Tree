@@ -351,6 +351,24 @@ export class CodexRuntime {
   async interrupt(threadId: string, turnId: string) {
     await this.request("turn/interrupt", { threadId, turnId });
   }
+  async steerTurn(
+    threadId: string,
+    expectedTurnId: string,
+    input: string,
+    messageId: string,
+  ) {
+    const result = record(
+      await this.request("turn/steer", {
+        threadId,
+        expectedTurnId,
+        clientUserMessageId: messageId,
+        input: [
+          { type: "text", text: `[AgentTree guidance ${messageId}]\n${input}` },
+        ],
+      }),
+    );
+    return protocolString(result.turnId);
+  }
   disconnect() {
     const rpc = this.rpc;
     this.rpc = undefined;

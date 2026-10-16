@@ -73,6 +73,25 @@ For relative build dependencies, grant the needed repositories and preserve the 
 
 Cross-repository commits and integration are separate operations. There is no atomic multi-repository commit, implicit parent-patch copying, automatic merge or repository installation. Dependencies must already be available offline or handled by an explicitly approved setup.
 
+## External read-only resources
+
+New-team manifests may register up to 16 explicit files or directories outside all coding repositories, state and runtime home:
+
+```json
+{
+  "defaultRepository": "research",
+  "repositories": { "research": { "path": "/absolute/path/research-repository", "tests": {} } },
+  "readOnlyResources": {
+    "target": "/Applications/Example.app",
+    "tools": "/absolute/path/reviewed-tools"
+  }
+}
+```
+
+Paths must be canonical and specific; broad system roots and symlink roots are refused. The registry is fixed for the state and is a team-wide read grant, separate from each Agent's narrower repository grant. `workspace_list` reports resource IDs and paths. `list_resource(resourceId, path?, offset?)` lists at most 1000 directory entries per page. `read_resource(resourceId, path?, offset?, length?, encoding?)` reads at most 65536 bytes; UTF-8 is the default, `base64` supports binary chunks. Its SHA-256 is a **chunk** hash, not a full-file integrity claim. Relative paths cannot traverse symlinks, parent directories or protected entries.
+
+The registered paths are also read roots for Lead terminal and approved tests. Explicit Seatbelt write denials protect them, including when executed tools try to modify resources. Toolchains and their runtimes must be separately authorized when outside default system roots. New resource browsing tools are available at every level; they do not grant terminal, writes or tests to deeper Agents. Existing native tool catalogs are retained on upgrade. This is a trusted local workspace boundary, not protection against arbitrary hostile host processes or all filesystem races.
+
 ## Capabilities
 
 | Level (depth) | Workspace | Tools |

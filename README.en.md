@@ -1,12 +1,14 @@
 # Codex Agent Tree
 
+> This README describes development on main; published packages contain the features of their matching tags.
+
 [简体中文](README.md) · English
 
 An installable Codex Skill for recursive teams of independent, recoverable Codex sessions, with message wakeups, task dependencies, controlled coding and conservative recovery.
 
 **`0.1.0-beta.1`: qualified on macOS arm64, Node ≥26.3.1 and exactly `codex-cli 0.162.0-alpha.17.2`, with one credential domain.** Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved test commands, and deeper members read-only review tools. Your current conversation is the operator; the managed Root is a separate session.
 
-This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 9 on current main. Existing read-only teams do not gain permissions automatically.
+This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 12 on current main. Existing read-only teams do not gain permissions automatically.
 
 Current main adds multiple repositories and worktrees, alongside post-Beta-1 task projection improvements and worktree recovery guidance. These are unreleased; the published Beta 1 ZIP remains unchanged. See the [multi-repository design and validation](docs/multi-repository-plan.md) and [review follow-up](docs/review-beta-1.md).
 
@@ -63,7 +65,7 @@ node "$SKILL_DIR/scripts/cat.mjs" status --target ROOT_ID
 
 Root creation returns a stable Agent ID. Results are in `status.attempts[].result`. An idle Root after its first delegation Turn does not mean the team has finished: inspect descendants and messages, then retrieve the Root's synthesis after child reports arrive. Retry uncertain requests with the same key and identical content.
 
-Teams consume model usage from your signed-in account. New teams observe token usage by default: 200000 is a warning threshold, not an execution gate, and child token allocation is optional. Structural and Turn-count limits always apply. Use `--token-policy enforce --tokens N` to opt into token admission checks; these still cannot hard-cap an executing Turn or your provider bill.
+Teams consume model usage from your signed-in account. New teams observe token usage by default: 5000000 is a warning threshold, not an execution gate, and no Agent receives a token allocation. New teams default to interactive mode with unlimited lifetime Turns and retained statistics. `--mode batch` keeps 20 per Agent / 100 per tree. Depth, lifetime Agent count and concurrency remain hard limits. Choose per-Agent/tree single or incremental reminders using total, noncached input or output. Task-wide soft budgets are separate; existing enforce trees retain compatibility.
 
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" send --target AGENT_ID --key input-001 --message 'Additional input'
@@ -98,7 +100,7 @@ Each coding state supports one Lead tree. Worktrees start from the initial commi
 
 ## Execution limits
 
-Default hard limits are depth 2, 16 lifetime Agents, 3 concurrent Turns, 20 Turns per Agent and 100 total Turns per tree. Configure them with `--max-depth`, `--max-agents`, `--concurrent`, `--max-turns` and `--max-total-turns`. Finishing an Agent does not refund its lifetime count. Prepared Turns count even if later cancelled, failed or interrupted; restart does not reset counts. Exhaustion blocks new admissions while accepted work can finish.
+Interactive defaults are depth 2, 16 lifetime Agents, 3 concurrent Turns and unlimited lifetime Turns. `--mode batch` defaults to 20 Turns per Agent and 100 total Turns per tree. Configure them with `--max-depth`, `--max-agents`, `--concurrent`, `--max-turns` and `--max-total-turns`. Finishing an Agent does not refund its lifetime count. Prepared Turns count even if later cancelled, failed or interrupted; restart does not reset counts. Exhaustion blocks new admissions while accepted work can finish.
 
 Depth and concurrency alone cannot bound sequential spawning or repeated message-triggered Turns. Lifetime member and Turn limits cover those cases. `view/status` expose `executionLimits` and token policy. In default observe mode, `--tokens N` only sets the usage warning threshold. Unknown execution keeps its original reconciliation fence and is never automatically replayed. See [operations](references/operations.md).
 
@@ -116,7 +118,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` combines agent summaries, tasks, budgets, message counts and blocking reasons. Pass its cursor to `wait`, then continue with each response's top-level cursor. `hasMore` indicates another event page. `noProgress` calls for inspecting missing input, fences, budgets or unknown work; it does not prove completion. Operator waiting does not occupy a managed Turn. See [operations](references/operations.md) for permissions, dependency edits, input files and cursor details.
 
-Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Current main migrates the database to schema 9; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
+Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Current main migrates the database to schema 12; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
 
 ## Development and validation
 
@@ -140,3 +142,15 @@ This Beta does not qualify Linux/Windows, multiple credential domains, automatic
 ## License
 
 Apache-2.0. The JSON-RPC transport reuses and modifies Stoneforge code; provenance and attribution are in [vendor](src/runtime/codex/vendor/README.md) and [NOTICE](NOTICE). Model execution and native history use the official Codex App Server daemon. This project is not affiliated with OpenAI.
+
+Current main also supports explicit external read-only resource registration for restricted browsing and Lead analysis commands. Resources remain protected from writes. With explicit user authorization, `limits --max-turns unlimited --max-total-turns unlimited --target ROOT_ID --reason TEXT` removes an existing tree's Turn ceilings without resetting counters or identities. See [resource access](references/coding.md#external-read-only-resources) and [limit updates](references/operations.md#explicit-turn-limit-changes).
+
+## Interactive execution control
+
+`send` attempts live guidance for a running interactive Agent; `--delivery queue` waits for the next Turn, and `steer` explicitly requests current-Turn delivery. `status.interaction` exposes delivery and uncertainty. Unknown outcomes are never automatically replayed. `control --action pause --immediate` persists a subtree fence and requests interruption; ordinary pause still drains.
+
+Defaults warn after 15 minutes of autonomous execution, 10 minutes without selected observable activity, or 8 consecutive identical tool rejections. Automatic pause and task token/time soft budgets are opt-in. Existing teams keep their policies and limits. See the [implementation plan, defaults and operations](docs/interactive-control.md). Validation uses bounded tests and a local native protocol probe; long-running real tasks are deferred.
+
+## Token usage reminders
+
+New teams have no per-dialogue token allocation. Default: one tree-wide reminder at 5000000 total tokens. Configure with `token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]`; disable with `--disable`. Alerts never pause, start Turns or request a model. Missing metrics remain unknown. See [reminders and migration](docs/token-reminders.md).

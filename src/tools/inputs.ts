@@ -193,7 +193,7 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_spawn",
-    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Token allocation is optional in observe mode; enforce mode requires tokens transferred from your own allocation. Structural and lifetime limits always apply. Accepted creation may still be initializing. Coding: repositoryId selects primary, repositoryIds delegates a subset (default only primary); second-level worktree is isolated, deeper default inherit or explicit isolated. Isolated starts at the registered base, not parent edits.",
+    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. New teams have no per-Agent token allocation. The tokens field is only for legacy enforce compatibility and is ignored in observe mode. Structural and lifetime limits always apply. Accepted creation may still be initializing. Coding: repositoryId selects primary, repositoryIds delegates a subset (default only primary); second-level worktree is isolated, deeper default inherit or explicit isolated. Isolated starts at the registered base, not parent edits.",
     {
       requestKey: string,
       name: string,

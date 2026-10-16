@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { rootSettings } from "../storage/interaction.ts";
+import { Store } from "../storage/store.ts";
 import {
   workspacePolicy,
   multiWorkspacePolicy,
@@ -41,6 +43,11 @@ const state = resolve(flag("state", join(homedir(), ".cat", "team"))!);
 const configPath = join(state, "config.json");
 const tokenPath = join(state, "operator-token");
 const socketPath = join(state, "control.sock");
+function turnLimit(value: unknown): number | null {
+  return value === "unlimited" || value === null
+    ? null
+    : integer(Number(value), "Turn limit", 1);
+}
 function config(): CoordinatorOptions {
   return JSON.parse(readFileSync(configPath, "utf8")) as CoordinatorOptions;
 }
@@ -198,7 +205,44 @@ async function serve() {
           const p = record(input.params);
           let result: unknown;
           if (input.method === "ping") result = coordinator.diagnostics();
-          else if (input.method === "view")
+          else if (input.method === "limits")
+            result = coordinator.setTurnLimits(
+              text(p.target, "target", 256),
+              p.patch as {
+                maxTotalTurns?: number | null;
+                maxTurnsPerAgent?: number | null;
+              },
+              text(p.reason, "reason", 2048),
+            );
+          else if (input.method === "token-reminder")
+            result = coordinator.store.reminders.configure(
+              text(p.target, "target", 256),
+              (p.scope ?? "agent") as "agent" | "tree",
+              p.policy,
+            );
+          else if (input.method === "interaction")
+            result = coordinator.store.interaction.configure(
+              text(p.target, "target", 256),
+              p.policy,
+            );
+          else if (input.method === "check-in") {
+            coordinator.store.interaction.checkIn(
+              text(p.target, "target", 256),
+            );
+            result = coordinator.status(String(p.target));
+          } else if (input.method === "guidance-resolve") {
+            requireCondition(
+              p.outcome === "delivered" || p.outcome === "retry-next",
+              "INVALID_INPUT",
+              "Invalid guidance resolution",
+            );
+            result = await coordinator.resolveGuidance(
+              text(p.target, "target", 256),
+              text(p.messageId, "message ID", 256),
+              p.outcome,
+              text(p.reason, "review reason", 2048),
+            );
+          } else if (input.method === "view")
             result = coordinator.view(text(p.target, "target", 256));
           else if (input.method === "wait") {
             socket.setTimeout(0); // Coordinator owns a bounded deadline and disconnect cancellation.
@@ -255,44 +299,57 @@ async function serve() {
               text(p.reason, "review reason", 2048),
             );
           else if (input.method === "root") {
-            const defaults = {
-              tokens: 200000,
-              maxDepth: 2,
-              maxAgents: 16,
-              maxConcurrentTurns: 3,
-              maxTurnsPerAgent: 20,
-              turnReservation: 5000,
-            };
-            const limits = {
-              tokenPolicy: (p.tokenPolicy ?? "observe") as
-                "observe" | "enforce",
-              maxTotalTurns: Number(p.maxTotalTurns ?? 100),
-              tokens: Number(p.tokens ?? defaults.tokens),
-              maxDepth: Number(p.maxDepth ?? defaults.maxDepth),
-              maxAgents: Number(p.maxAgents ?? defaults.maxAgents),
-              maxConcurrentTurns: Number(
-                p.concurrent ?? defaults.maxConcurrentTurns,
-              ),
-              maxTurnsPerAgent: Number(p.maxTurns ?? defaults.maxTurnsPerAgent),
-              turnReservation: Number(p.reserve ?? defaults.turnReservation),
-            };
+            const { policy, limits, reminder } = rootSettings(p);
+            const rootKey = text(p.requestKey, "root request key", 128);
+            const existingRoot = coordinator.store.db
+              .prepare("SELECT agent_id FROM root_requests WHERE request_key=?")
+              .get(rootKey);
             result = coordinator.createRoot(
               text(p.name, "name", 96),
               text(p.task, "task"),
               limits,
-              text(p.requestKey, "root request key", 128),
+              rootKey,
+              policy,
             );
-          } else if (input.method === "send")
-            result = {
-              messageId: coordinator.submitInput(
-                text(p.target, "target", 256),
-                text(p.requestKey, "request key", 128),
-                text(p.message, "message"),
-              ),
-            };
-          else if (input.method === "control") {
-            const c = controlInput(p);
-            result = await coordinator.control(c.target, c.action, c.scope);
+            if (!existingRoot)
+              coordinator.store.reminders.configure(
+                (result as { id: string }).id,
+                "tree",
+                reminder,
+              );
+          } else if (input.method === "send") {
+            requireCondition(
+              p.delivery === undefined ||
+                ["auto", "queue", "steer"].includes(String(p.delivery)),
+              "INVALID_INPUT",
+              "Invalid delivery mode",
+            );
+            const guidance = await coordinator.submitGuidance(
+              text(p.target, "target", 256),
+              text(p.requestKey, "request key", 128),
+              text(p.message, "message"),
+              (p.delivery ?? "auto") as "auto" | "queue" | "steer",
+            );
+            result = { messageId: guidance.message_id, guidance };
+          } else if (input.method === "control") {
+            const { immediate, ...rest } = p;
+            requireCondition(
+              immediate === undefined || typeof immediate === "boolean",
+              "INVALID_INPUT",
+              "Invalid immediate flag",
+            );
+            const c = controlInput(rest);
+            requireCondition(
+              !immediate || c.action === "pause",
+              "INVALID_INPUT",
+              "Immediate applies only to pause",
+            );
+            result = await coordinator.control(
+              c.target,
+              c.action,
+              c.scope,
+              immediate === true,
+            );
           } else if (input.method === "stop") result = { stopping: true };
           else throw new Error("Unknown control method");
           socket.end(JSON.stringify({ result }) + "\n");
@@ -380,6 +437,8 @@ try {
     if (workspace)
       for (const repo of Object.values(repositories(workspace)))
         assertWorkspaceSeparation(repo.repository, state, runtimeHome);
+    for (const resource of Object.values(workspace?.readOnlyResources ?? {}))
+      assertWorkspaceSeparation(resource, state, runtimeHome);
     mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
     const providerEnv = flag("provider-env");
     const keychainService = flag("keychain-service");
@@ -505,9 +564,19 @@ try {
         name: flag("name", "Root"),
         task: text(flag("task"), "task"),
         requestKey: flag("key", randomUUID()),
+        mode: flag("mode"),
+        autonomyWarnMs: flag("autonomy-warn-ms"),
+        autonomyPauseMs: flag("autonomy-pause-ms"),
+        stallWarnMs: flag("stall-warn-ms"),
+        repeatErrorThreshold: flag("repeat-error-threshold"),
+        taskTokenBudget: flag("task-token-budget"),
+        taskTimeBudgetMs: flag("task-time-budget-ms"),
         tokenPolicy: flag("token-policy"),
         maxTotalTurns: flag("max-total-turns"),
         tokens: flag("tokens"),
+        tokenAlertAt: flag("token-alert-at"),
+        tokenAlertEvery: flag("token-alert-every"),
+        tokenAlertMetric: flag("token-alert-metric"),
         maxDepth: flag("max-depth"),
         maxAgents: flag("max-agents"),
         concurrent: flag("concurrent"),
@@ -637,7 +706,91 @@ try {
         2,
       ),
     );
-  else if (command === "native-history")
+  else if (command === "limits") {
+    const target = text(flag("target"), "target"),
+      reason = text(flag("reason"), "reason", 2048);
+    const patch = {
+      ...(flag("max-total-turns") === undefined
+        ? {}
+        : { maxTotalTurns: turnLimit(flag("max-total-turns")) }),
+      ...(flag("max-turns") === undefined
+        ? {}
+        : { maxTurnsPerAgent: turnLimit(flag("max-turns")) }),
+    };
+    if (args.includes("--offline")) {
+      requireCondition(
+        existsSync(join(state, "business.sqlite")),
+        "NOT_FOUND",
+        "State database is missing",
+      );
+      const store = new Store(join(state, "business.sqlite"));
+      try {
+        console.log(JSON.stringify(store.setTurnLimits(target, patch, reason)));
+      } finally {
+        store.close();
+      }
+    } else
+      console.log(
+        JSON.stringify(await request("limits", { target, patch, reason })),
+      );
+  } else if (command === "token-reminder") {
+    const policy = args.includes("--disable")
+      ? null
+      : {
+          metric: flag("metric", "total"),
+          thresholdTokens: integer(Number(flag("threshold")), "threshold", 1),
+          repeatEveryTokens:
+            flag("every") === undefined
+              ? null
+              : integer(Number(flag("every")), "interval", 1),
+        };
+    console.log(
+      JSON.stringify(
+        await request("token-reminder", {
+          target: text(flag("target"), "target"),
+          scope: flag("scope", "agent"),
+          policy,
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "interaction") {
+    const policy = JSON.parse(
+      readFileSync(text(flag("input-file"), "policy file"), "utf8"),
+    );
+    console.log(
+      JSON.stringify(
+        await request("interaction", {
+          target: text(flag("target"), "target"),
+          policy,
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "check-in") {
+    console.log(
+      JSON.stringify(
+        await request("check-in", { target: text(flag("target"), "target") }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "guidance-resolve") {
+    console.log(
+      JSON.stringify(
+        await request("guidance-resolve", {
+          target: text(flag("target"), "target"),
+          messageId: text(flag("message-id"), "message ID"),
+          outcome: flag("outcome"),
+          reason: text(flag("reason"), "reason", 2048),
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "native-history")
     console.log(
       JSON.stringify(
         await request("native-history", {
@@ -678,10 +831,11 @@ try {
         2,
       ),
     );
-  else if (command === "send")
+  else if (command === "send" || command === "steer")
     console.log(
       JSON.stringify(
         await request("send", {
+          delivery: flag("delivery", command === "steer" ? "steer" : "auto"),
           target: text(flag("target"), "target"),
           message: text(flag("message"), "message"),
           requestKey: flag("key", randomUUID()),
@@ -694,6 +848,7 @@ try {
         await request("control", {
           target: flag("target"),
           action: flag("action"),
+          immediate: args.includes("--immediate"),
           scope: flag("scope", "subtree"),
         }),
         null,
@@ -704,7 +859,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

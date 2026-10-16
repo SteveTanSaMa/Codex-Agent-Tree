@@ -11,6 +11,7 @@ export function sandboxCommand(
   readOnlyRoots: string[] = [],
   writeRoots: string[] = [],
   readOnlyWorkspace = false,
+  protectedReadOnlyRoots: string[] = [],
 ): TestCommand {
   requireCondition(
     process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec"),
@@ -48,6 +49,7 @@ export function sandboxCommand(
     .join(" ")})
 (allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/localtime"))
 (allow file-write* ${readOnlyWorkspace ? "" : `(subpath ${quoted(cwd)})`} (subpath ${quoted(home)}) ${writeRoots.map((p) => `(subpath ${quoted(existsSync(p) ? realpathSync(p) : resolve(p))})`).join(" ")} (literal "/dev/null"))
+${protectedReadOnlyRoots.map((p) => `(deny file-write* (subpath ${quoted(realpathSync(p))}))`).join("\n")}
 ${leadWorkspaces ? "" : `(deny file-write* (subpath ${quoted(join(cwd, ".git"))}))`}
 `;
   const path = join(home, "test.sb");

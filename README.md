@@ -1,12 +1,14 @@
 # Codex Agent Tree
 
+> 本文描述 main 开发版本；已发布安装包的功能以对应 tag 为准。
+
 简体中文 · [English](README.en.md)
 
 一个可安装的 Codex Skill：用独立、可恢复的 Codex Session 组成递归团队，支持消息唤醒、任务依赖、受控编码和故障对账。
 
 **`0.1.0-beta.1`：面向 macOS arm64、Node ≥26.3.1、精确版本 `codex-cli 0.162.0-alpha.17.2`，单凭据域。** 默认仍是文本分析；显式选择 Git 仓库后，Lead 可使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
 
-Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。main 升级会迁移至 schema 9，请先停止并备份完整 state；已有只读团队不自动获得新权限。
+Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。main 升级会迁移至 schema 12，请先停止并备份完整 state；已有只读团队不自动获得新权限。
 
 main 已加入多仓库与多 worktree 支持，以及 Beta 1 审查后的 Task 投影优化和工作树恢复说明，尚未另发 Release；已发布 Beta 1 ZIP 保持不变。见[多仓库设计与验证](docs/multi-repository-plan.md)和[审查跟进](docs/review-beta-1.md)。
 
@@ -62,7 +64,7 @@ node "$SKILL_DIR/scripts/cat.mjs" status --target ROOT_ID
 
 `init` 把现有登录复制到专用 runtime home（0600），不修改原配置、历史或认证。`--auth-from PATH` 可指定来源。使用短的专用目录，不要把普通 `CODEX_HOME` 当作 runtime home。默认 state 为 `~/.cat/team`，更换后每条命令带 `--state`。
 
-Root 返回稳定 Agent ID，输出在 `status` 的 `attempts[].result` 中。Root 首次委派后空闲不代表完成；检查子节点和消息后，再取 Root 收到结果后的综合输出。请求重试保持 `--key` 和内容一致。任务消耗登录账号模型用量。新团队默认只观测 token：200000 是告警阈值，超出不阻断执行；子 Agent 无需分配 token。深度、累计成员、并发和 Turn 次数始终是硬限制。需要 token 准入时显式启用 `--token-policy enforce --tokens N`，它仍不是运行中 Turn 或账号账单的硬上限。
+Root 返回稳定 Agent ID，输出在 `status` 的 `attempts[].result` 中。Root 首次委派后空闲不代表完成；检查子节点和消息后，再取 Root 收到结果后的综合输出。请求重试保持 `--key` 和内容一致。任务消耗登录账号模型用量。新团队默认只观测 token：5000000 是告警阈值，超出不阻断执行；所有 Agent 均不分配对话 token 配额。新团队默认交互模式，累计 Turn 不设硬上限但持续统计；`--mode batch` 保留单 Agent 20 / 全树 100。深度、累计成员和并发仍为硬限制。支持按对话/全树的单次或增量提醒，可选择总量、非缓存输入或输出。任务级软预算由用户单独选择；旧 enforce 状态保留兼容。
 
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" send --target AGENT_ID --key input-001 --message '补充输入'
@@ -97,7 +99,7 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$HOME/.cat/code-team"
 
 ## 执行限制
 
-默认硬限制为深度 2、累计 16 个 Agent、3 个并行 Turn、每 Agent 20 个 Turn、整棵树 100 个 Turn。可用 `--max-depth`、`--max-agents`、`--concurrent`、`--max-turns`、`--max-total-turns` 调整。成员结束不会退还累计数量；失败、中断及已准备后取消的 Turn 仍计数，重启不清零。达到上限不再接纳新工作，已接纳的工作继续收尾。
+交互模式默认硬限制为深度 2、累计 16 个 Agent、3 个并行 Turn；累计 Turn 默认不限。`--mode batch` 默认每 Agent 20、全树 100 个 Turn。可用 `--max-depth`、`--max-agents`、`--concurrent`、`--max-turns`、`--max-total-turns` 调整。成员结束不会退还累计数量；失败、中断及已准备后取消的 Turn 仍计数，重启不清零。达到上限不再接纳新工作，已接纳的工作继续收尾。
 
 仅限制深度与并发不能阻止串行创建和反复消息唤醒，因此还保留累计成员与执行次数限制。`view/status` 返回 `executionLimits` 与 token 策略。`--tokens N` 在默认 observe 模式仅设置观测阈值；不会中断模型。未知执行仍按原规则保守对账，不自动重放。详见 [操作说明](references/operations.md)。
 
@@ -115,7 +117,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` 统一返回 Agent、任务摘要、预算、消息计数和阻塞原因。用其 cursor 调用 `wait`，之后用每次响应的顶层 cursor 续读，`hasMore` 表示还有事件页。`noProgress` 需要检查输入、fence、预算或未知执行，并非团队完成；等待不占用托管 Turn。详细动作、权限和输入文件格式见 [操作说明](references/operations.md)。
 
-升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。当前 main 会将数据库迁移到 schema 9，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
+升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。当前 main 会将数据库迁移到 schema 12，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
 
 ## 开发与验证
 
@@ -137,3 +139,15 @@ npm run package:skill
 ## 许可
 
 Apache-2.0。复用并修改 Stoneforge JSON-RPC transport，固定来源与声明见 [vendor](src/runtime/codex/vendor/README.md) 和 [NOTICE](NOTICE)。模型执行和原生历史复用 Codex 官方 App Server daemon。本项目不隶属于 OpenAI。
+
+main 还支持在新团队 manifest 中显式登记外部只读资源，供受限成员浏览和读取、供 Lead 命令只读分析；原资源不可写。经用户明确授权，可用 `limits --max-turns unlimited --max-total-turns unlimited --target ROOT_ID --reason TEXT` 取消原树 Turn 上限，保留计数和身份。[资源访问](references/coding.md#external-read-only-resources) · [额度更新](references/operations.md#explicit-turn-limit-changes)。
+
+## 交互执行控制
+
+`send` 对运行中的交互 Agent 默认尝试实时引导；`--delivery queue` 留到下一轮，`steer` 显式请求当前执行投递。`status.interaction` 区分已接收、投递中、Runtime 接受、排队和未知；未知结果不自动重发。`control --action pause --immediate` 持久化子树暂停并请求中断，普通 pause 仍等待当前轮结束。
+
+默认在连续自主执行 15 分钟、缺少可观测活动 10 分钟或连续 8 次相同工具拒绝时告警；自动暂停和任务 token/时间软预算由用户选择。已有团队不自动改变策略和限额。详见[实施计划、默认值与操作说明](docs/interactive-control.md)。本轮仅做短测试和本地原生协议探针，未安排长时间真实任务。
+
+## Token 用量提醒
+
+新团队取消对话 token 配额；默认全树达到 5000000 总 token 提醒一次。`token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]` 可配置单次或增量提醒，`--disable` 关闭。提醒不暂停、不新增 Turn、不请求模型；用量缺失时显示未观测。详见[用量提醒与迁移说明](docs/token-reminders.md)。

@@ -57,22 +57,22 @@ Events already committed after a cursor are returned immediately; unrelated tree
 
 ## Execution limits and token policy
 
-Root defaults: `--max-depth 2 --max-agents 16 --concurrent 3 --max-turns 20 --max-total-turns 100`. These are hard admission limits in both policies. Depth starts at zero; Agent count is lifetime accepted members, including terminated ones. `--max-turns` applies per Agent; `--max-total-turns` counts all prepared Turns in the tree, including later failures, interruptions and cancelled unsent attempts. Counts survive restart; cancellation never refunds a Turn. A prepared Turn already owns its slot and can finish dispatch when the limit is reached. Limits do not stop a currently executing Turn mid-flight.
+Interactive root defaults: depth 2, 16 Agents, concurrency 3, unlimited cumulative Turns. Batch keeps 20 Turns per Agent / 100 per tree. Finite explicit limits are admission gates. Depth starts at zero; Agent count is lifetime accepted members, including terminated ones. `--max-turns` applies per Agent; `--max-total-turns` counts all prepared Turns in the tree, including later failures, interruptions and cancelled unsent attempts. Counts survive restart; cancellation never refunds a Turn. A prepared Turn already owns its slot and can finish dispatch when the limit is reached. Limits do not stop a currently executing Turn mid-flight.
 
 `status` and `view` expose `executionLimits` with used/remaining tree Turns and structural bounds. `tree-turn-limit` means no further Turns or new children can be admitted. Inspect the requested result and queued work, then report the limit; do not create another root or clear a human fence to evade it.
 
-New trees default to `--token-policy observe`. `--tokens 200000` is a usage warning threshold; `--reserve 5000` remains an accounting estimate, not an admission gate. Child `tokens` is optional and does not transfer capacity in this mode. Legacy token hints are accepted but ignored for allocation; child `capacity` remains zero. Token overruns and another Agent's unsettled usage do not block new work. Unknown execution still blocks its own Agent, occupies concurrency, and is never automatically replayed.
+New trees default to `--token-policy observe`. `--tokens 5000000` is a usage warning threshold; `--reserve 5000` remains an accounting estimate, not an admission gate. Child `tokens` is optional and does not transfer capacity in this mode. Legacy token hints are accepted but ignored for allocation; child `capacity` remains zero. Token overruns and another Agent's unsettled usage do not block new work. Unknown execution still blocks its own Agent, occupies concurrency, and is never automatically replayed.
 
 ```sh
 # Default: structure and Turn counts constrain execution; token usage is observed.
 node "$SKILL_DIR/scripts/cat.mjs" root --name Lead --key review-001 --max-agents 3 --max-total-turns 12 --task-file /absolute/path/task.txt
-# Optional: token admission enforced in addition to the same structural limits.
-node "$SKILL_DIR/scripts/cat.mjs" root --name Lead --key budgeted-001 --token-policy enforce --tokens 600000 --task-file /absolute/path/task.txt
+# Optional: task-wide soft pause budget, without per-Agent allocation.
+node "$SKILL_DIR/scripts/cat.mjs" root --name Lead --key budgeted-001 --task-token-budget 600000 --task-file /absolute/path/task.txt
 ```
 
-In `enforce`, child allocation transfers from the parent, each Turn reserves budget before dispatch, and unresolved terminal usage blocks new consumption. Allocation (`Agent.capacity`), reservation/liability (`reserved`) and charged usage (`spent`, `accounting.charged`) remain distinct. This is the prior budget protocol, not a hard runtime or provider-billing cap. Choose policy at root creation; model tools cannot change it or the execution limits. Existing trees without a policy retain `enforce`, with their implicit tree Turn bound derived from maxAgents × maxTurnsPerAgent.
+In `enforce`, child allocation transfers from the parent, each Turn reserves budget before dispatch, and unresolved terminal usage blocks new consumption. Allocation (`Agent.capacity`), reservation/liability (`reserved`) and charged usage (`spent`, `accounting.charged`) remain distinct. This is the prior budget protocol, not a hard runtime or provider-billing cap. This protocol is retained only for existing enforce states; new public roots do not enable it. Model tools cannot change it or execution limits. Existing trees without a policy retain `enforce`, with their implicit tree Turn bound derived from maxAgents × maxTurnsPerAgent.
 
-Both policies preserve native observations and deduplicate cumulative usage. `budget.tokenPolicy` / `enforced` identify whether arithmetic balances actually gate admission. `observedTokens` sums observed/charged usage; it includes cached input. `warningExceeded` compares it to `warningThresholdTokens`, with `usage.threshold_exceeded` emitted at the first native crossing in observe mode; reservations alone do not trigger that alert. `availableTokens` and `excessLiabilityTokens` retain the legacy arithmetic, including retained liability; in observe mode they are diagnostic, not remaining execution allowance. Enforce mode retains `budget.tree_overcommitted` for an excess-liability crossing. Actual costs cannot be inferred from these totals alone.
+Both policies preserve native observations and deduplicate cumulative usage. New observe-mode roots have no Agent allocations; availableTokens is null, and usage reminders are independent of budget arithmetic. Use status/view tokenUsage and usage.reminder events; see [token reminders](../docs/token-reminders.md). Existing enforce states retain their ledger and admission constraints. Task soft budgets and lifecycle fences remain separate.
 
 When a hard limit blocks progress, reduce delegation, synthesize available results or report blocked work. Do not invent final usage or discard unknown state. Historical usage and human settlement records remain available in both policies.
 
@@ -113,9 +113,9 @@ Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login 
 
 ## Usage evidence reconciliation
 
-Current main upgrades to schema 9, adding an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+Current main upgrades to schema 12, adding an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Older source refuses schema 9. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Older source refuses schema 12. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Third-party provider configuration
 
@@ -137,3 +137,22 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 
 
 Operator `settle-usage` now retains a verified receipt as `pending` when preceding evidence prevents safe application. Pending is not finalized and does not release liability. Subsequent compatible receipts/native samples and restart reevaluate it automatically; no resubmission is required. `status.attempts[].usageReceipts` exposes pending/applied evidence. Contradictory evidence stays pending; inspect it instead of inventing another amount. The strict internal settlement operation still refuses erasing native facts.
+
+## Explicit Turn limit changes
+
+New interactive teams default to unlimited lifetime Turns; `--mode batch` retains 20 per Agent and 100 per tree. For explicit finite/unlimited settings, `root --max-turns unlimited --max-total-turns unlimited` stores JSON null as an actual disabled ceiling. `status.executionLimits.remainingTurns` is then null. Agent count, depth, concurrent Turns, token policy and all lifecycle/reconciliation fences continue to apply. Agents cannot alter these limits themselves.
+
+For an existing tree:
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" limits --state "$STATE" --target ROOT_ID \
+  --max-turns unlimited --max-total-turns unlimited --reason 'Explicit user authorization'
+```
+
+Finite integers may also be supplied. The transaction preserves every used Turn, Agent, native binding, and request key, refuses limits below retained usage, and emits `limits.updated` with before/after/reason. Repeating identical values is a no-op. Omit a flag to retain its current value. This operator endpoint does not grant model-callable quota modification.
+
+`--offline` acquires normal database ownership and refuses a live Coordinator. It is intended for a deliberately stopped service, including upgrading an older service that lacks the online endpoint. Do not restart a working team merely to adjust a ceiling before it matters: wait for a safe execution boundary, preserve queued work, then stop/update/start the same state. A disabled ceiling removes the automatic Turn-count stopping condition; task completion and structural/lifecycle constraints still govern execution.
+
+## Interactive guidance and protection
+
+Read [interactive control](../docs/interactive-control.md) for current-Turn guidance, stable-key retries, unknown delivery review, immediate pause, tree-wide autonomy clocks and optional soft task budgets. Old trees retain policy and limits. Schema 11 requires a stopped-state backup before upgrade.

@@ -438,7 +438,7 @@ test("schema 4 upgrades to task storage without changing existing native identit
       assert.equal(
         reopened.db.prepare("SELECT version FROM schema_version").get()
           ?.version,
-        9,
+        12,
       );
       assert.deepEqual(reopened.binding(f.root.id), binding);
       assert.deepEqual(reopened.budgetStatus(f.root.tree_id), budget);

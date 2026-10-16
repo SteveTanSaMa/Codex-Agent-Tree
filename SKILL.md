@@ -1,6 +1,6 @@
 ---
 name: codex-agent-tree
-description: Run durable, recursive Codex analysis and coding teams with independent sessions, persistent messages, explicit tasks and dependencies, token budgets, and event waiting. Use when the user wants an asynchronous agent tree or wants to inspect, coordinate, or control an existing team.
+description: Run durable, recursive Codex analysis and coding teams with independent sessions, persistent messages, explicit tasks and dependencies, usage reminders, optional task budgets, and event waiting. Use when the user wants an asynchronous agent tree or wants to inspect, coordinate, or control an existing team.
 ---
 
 # Codex Agent Tree
@@ -32,13 +32,15 @@ Use the coding workflow only for repository work authorized by the user. Keep st
 
 Require coders to report actual diffs, worktree paths and test receipts. Lead reviews and integrates changes using `terminal`, then verifies in its own checkout. Third-level review is static unless the operator performs the test. On an uncertain command receipt, inspect its existing outcome; do not switch call IDs to bypass recovery. Retain worktrees until changes have been reviewed. See [coding operations](references/coding.md) for capabilities and limitations.
 
+External files and toolchains require explicit operator-selected `readOnlyResources` in the new-team manifest; see [resource access](references/coding.md#external-read-only-resources). All team members can browse/read registered resources, but resources remain protected from writes even in Lead terminal. Do not use copied targets or wrapper commands to silently bypass missing authorization.
+
 For multiple repositories, read the manifest and delegation examples in [coding operations](references/coding.md#multiple-repositories). Register each independent Git root, including sibling repositories below a non-Git parent. Delegate only the needed `repositoryIds`, select a primary `repositoryId`, and keep all paths and test commands operator-controlled. A secondary gets an isolated worktree per granted repository; deeper members inherit by default or request `worktree: "isolated"` while remaining read-only. Use `workspace_list` to inspect mappings. Independent worktrees start at pinned base commits and do not copy parent patches. Lead reviews and integrates each repository separately.
 
 ## Delegate and retrieve
 
 Translate the user's objective into a task containing the relevant input, expected output, child roles, and completion criteria. Include: delegate through `agent_spawn`; end the initial Turn after delegation; children report to their parent with `agent_send`; recipients explicitly `agent_ack` delivered messages and synthesize the actual reports. Managed Agents receive these tools automatically; they are not tools exposed in the operator's current chat.
 
-New teams use token observation by default: do not plan token transfers or require child `tokens`. Set structural limits suitable for the task: depth, lifetime Agent count, concurrent Turns, per-Agent Turns and total tree Turns. Defaults are depth 2, 16 Agents, 3 concurrent Turns, 20 Turns per Agent and 100 total Turns. A small recursive team usually needs much less; these are ceilings, not targets. Lifetime counts include finished members and failed/interrupted/prepared Turns and survive restart.
+New teams use token observation by default: do not plan token transfers or require child `tokens`. Set structural limits suitable for the task: depth, lifetime Agent count and concurrent Turns. New teams default to interactive mode: depth 2, 16 Agents, 3 concurrent Turns, with unlimited lifetime Turns. `--mode batch` retains 20 Turns per Agent and 100 total; explicit Turn ceilings remain available. A small recursive team usually needs much less; these are ceilings, not targets. Lifetime counts include finished members and failed/interrupted/prepared Turns and survive restart.
 
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" root --state "$STATE" --name Lead --key UNIQUE_TASK_KEY --task-file /absolute/path/task.txt --max-depth 2 --max-agents 3 --concurrent 2 --max-turns 6 --max-total-turns 12
@@ -50,9 +52,17 @@ Keep the returned stable Root ID and request key. Retry an uncertain submission 
 
 `status` returns `attempts[].result`, binding/Thread IDs, messages, budget, and errors. An idle Root or the Root's first delegation response is not a finished team. Check descendants and queued messages, then read the Root's synthesis after its result message Turn completes. Prefer the compact `view` and cursor-based `wait` below to repeated status polling. On timeout, report current progress without claiming success or submitting a duplicate team. Continue monitoring when the user wants the completed result. For background-only requests, return the Root ID and query command once accepted.
 
+## Interactive guidance and stopping
+
+When the user revises a running managed task, forward the correction through the operator channel; acknowledging it only in this chat does not deliver it to the team. `send` defaults to live guidance for a running interactive Agent; use `--delivery queue` for later work. `steer` explicitly requests live guidance. Keep the same key/content on retry and inspect `status.interaction` for delivered/deferred/unknown; accepted input is not proof of compliance. Unknown delivery is never automatically replayed and blocks new Turns for that Agent until operator review. Existing teams without an interaction policy keep queue behavior.
+
+Use `control --action pause --immediate` for an authorized immediate subtree stop; ordinary pause drains. Resume does not replay interrupted side effects. Interactive defaults warn after 15 minutes of autonomous work, 10 minutes without selected observable activity, or 8 consecutive identical tool rejections; automatic pauses and task budgets are opt-in. Only successful new human live guidance, explicit check-in or human resume renews autonomy, not task totals. Read [interactive control](docs/interactive-control.md) for policy configuration, delivery uncertainty, soft-budget limits and the bounded validation scope.
+
 ## Explicit tasks and dependencies
 
-Token totals include cached input and repeated tool context; they are not a bill. By default `--tokens` is a warning threshold (200000), not an execution gate. Optional `--token-policy enforce --tokens N` enables the legacy admission budget and requires child allocations; read [operations](references/operations.md) when explicitly requested. Existing trees retain their previous policy. Never change policy or create another root to evade the user's chosen limits.
+Turn ceilings can be explicitly disabled with `root --max-turns unlimited --max-total-turns unlimited`. To change an existing tree only on user authorization, use `limits --target ROOT_ID --max-turns unlimited --max-total-turns unlimited --reason TEXT`; counters and identities remain intact. `--offline` requires a stopped Coordinator and refuses a live owner. Read [operations](references/operations.md) before changing limits.
+
+New teams have no per-Agent token allocation. Default reminders fire once at 5000000 tree-wide total tokens; `token-reminder` configures per-Agent/tree single or incremental alerts using total, noncached input or output. Read [token reminders](docs/token-reminders.md) for commands and measurement limits. Surface `usage.reminder` events from wait/events once to the user; do not inject them into the managed dialogue. Alerts never pause or create Turns. Users may separately opt into task-wide soft budgets. Legacy enforce trees keep their constraints; never bypass them by recreating a root. Cached input is not a bill.
 
 For delegated work with completion criteria, ask the managed Root to create tasks using `agent_task_create`, passing a stable `requestKey`, `subject`, `description`, and optional `blockedBy` task IDs. For example, create a calculation task and a verification task blocked by that calculation. Include task IDs and expected outputs in child assignments.
 

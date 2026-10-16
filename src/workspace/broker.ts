@@ -1,3 +1,8 @@
+import {
+  validateResources,
+  resourceCall,
+  type ReadOnlyResources,
+} from "./resources.ts";
 import { sandboxCommand } from "./sandbox.ts";
 import { fileURLToPath } from "node:url";
 import {
@@ -49,6 +54,7 @@ export interface WorkspaceSelection {
   worktree?: "isolated" | "inherit";
 }
 export interface WorkspacePolicy {
+  readOnlyResources?: ReadOnlyResources;
   defaultRepository?: string;
   repositories?: Record<string, RepositoryPolicy>;
   repository: string;
@@ -154,7 +160,7 @@ export function multiWorkspacePolicy(value: unknown): WorkspacePolicy {
   const manifest = value as Record<string, unknown>;
   requireCondition(
     Object.keys(manifest).every((k) =>
-      ["defaultRepository", "repositories"].includes(k),
+      ["defaultRepository", "repositories", "readOnlyResources"].includes(k),
     ) &&
       typeof manifest.defaultRepository === "string" &&
       manifest.repositories &&
@@ -203,12 +209,19 @@ export function multiWorkspacePolicy(value: unknown): WorkspacePolicy {
     ...registry[manifest.defaultRepository]!,
     defaultRepository: manifest.defaultRepository,
     repositories: registry,
+    ...(manifest.readOnlyResources === undefined
+      ? {}
+      : { readOnlyResources: manifest.readOnlyResources as ReadOnlyResources }),
   };
   validateWorkspacePolicy(policy);
   return policy;
 }
 export function validateWorkspacePolicy(policy: WorkspacePolicy) {
   validatePolicy(policy);
+  validateResources(policy.readOnlyResources ?? {});
+  for (const resource of Object.values(policy.readOnlyResources ?? {}))
+    for (const repo of Object.values(repositories(policy)))
+      assertWorkspaceSeparation(repo.repository, resource);
   const registry = repositories(policy);
   const ids = Object.keys(registry);
   requireCondition(
@@ -333,8 +346,38 @@ function tool(
     },
   };
 }
-export function workspaceTools(depth: number, tests: string[]): DynamicTool[] {
+export function workspaceTools(
+  depth: number,
+  tests: string[],
+  resources = false,
+): DynamicTool[] {
   return [
+    ...(resources
+      ? [
+          tool(
+            "list_resource",
+            "List a registered external read-only resource directory. No execution. workspace_list lists resource IDs. Symlinks are listed but cannot be traversed. At most 1000 entries per page.",
+            {
+              resourceId: string,
+              path: string,
+              offset: { type: "integer", minimum: 0 },
+            },
+            ["resourceId"],
+          ),
+          tool(
+            "read_resource",
+            "Read up to 65536 bytes from a registered external read-only resource. Binary files require encoding base64. Offset/length support bounded chunks; chunkSha256 hashes only returned bytes. Never write or execute a resource.",
+            {
+              resourceId: string,
+              path: string,
+              offset: { type: "integer", minimum: 0 },
+              length: { type: "integer", minimum: 1, maximum: 65536 },
+              encoding: { type: "string", enum: ["utf8", "base64"] },
+            },
+            ["resourceId"],
+          ),
+        ]
+      : []),
     tool(
       "workspace_list",
       "List your authorized repositories, primary repository, worktree owners, paths and approved tests. Other tools accept optional repositoryId; omission selects your primary repository.",
@@ -435,6 +478,8 @@ export class WorkspaceBroker {
       }));
     for (const repo of Object.values(repositories(policy)))
       assertWorkspaceSeparation(repo.repository, this.state);
+    for (const resource of Object.values(policy.readOnlyResources ?? {}))
+      assertWorkspaceSeparation(resource, this.state);
   }
   selection(agent: Agent, repositoryId?: unknown) {
     const assignment = this.assignment(agent.id);
@@ -467,6 +512,7 @@ export class WorkspaceBroker {
     const assignment = this.assignment(agent.id);
     return {
       ...assignment,
+      readOnlyResources: this.policy.readOnlyResources ?? {},
       repositories: assignment.repositoryIds.map((id) => ({
         repositoryId: id,
         workspace: this.workspacePath(agent, id),
@@ -664,6 +710,7 @@ export class WorkspaceBroker {
       if (!agentId || id === agentId) running.controller.abort();
   }
   validateCommand(agent: Agent, name: string, value: unknown): TestCommand {
+    validateResources(this.policy.readOnlyResources ?? {});
     requireCondition(
       value !== null && typeof value === "object" && !Array.isArray(value),
       "INVALID_INPUT",
@@ -739,6 +786,8 @@ export class WorkspaceBroker {
     const args = value as Record<string, unknown>;
     const allowed: Record<string, string[]> = {
       workspace_list: [],
+      list_resource: ["resourceId", "path", "offset"],
+      read_resource: ["resourceId", "path", "offset", "length", "encoding"],
       read_file: ["path"],
       write_file: ["path", "content", "expectedHash"],
       search_code: ["query", "directory"],
@@ -761,6 +810,8 @@ export class WorkspaceBroker {
     );
     const { repo } = this.selection(agent, args.repositoryId);
     if (name === "workspace_list") return this.describe(agent);
+    if (["read_resource", "list_resource"].includes(name))
+      return resourceCall(this.policy.readOnlyResources ?? {}, name, args);
     if (!["run_test", "terminal"].includes(name))
       this.requireWorkspaceIdle(
         agent,
@@ -984,7 +1035,13 @@ export class WorkspaceBroker {
                 name === "terminal"
                   ? join(this.state, "workspaces")
                   : undefined,
-                reads,
+                [
+                  ...reads,
+                  ...Object.values(this.policy.readOnlyResources ?? {}),
+                ],
+                [],
+                false,
+                Object.values(this.policy.readOnlyResources ?? {}),
               ),
             ),
           ],

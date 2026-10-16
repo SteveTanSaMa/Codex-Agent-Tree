@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -64,7 +65,7 @@ test("new trees observe tokens by default: no child allocation, no admission blo
       "child",
       spawnInput({ requestKey: "child", ...work }),
     );
-    assert.equal(f.store.agent(root.id).capacity, 1);
+    assert.equal(f.store.agent(root.id).capacity, 0);
     assert.equal(child.capacity, 0);
     run(f.store, child.id);
     f.store.observeNativeUsage(a.attempt.id, 1, 200);
@@ -76,18 +77,14 @@ test("new trees observe tokens by default: no child allocation, no admission blo
     assert.equal(budget.observedTokens, 200);
     assert.equal(budget.warningExceeded, true);
     assert.equal(
-      f.store
-        .events(root.id)
-        .filter((e) => e.kind === "usage.threshold_exceeded").length,
+      f.store.events(root.id).filter((e) => e.kind === "usage.reminder").length,
       1,
     );
     const next = run(f.store, root.id);
     f.store.observeNativeUsage(next.attempt.id, 1, 250);
     assert.equal(f.store.budgetStatus(root.tree_id).observedTokens, 250);
     assert.equal(
-      f.store
-        .events(root.id)
-        .filter((e) => e.kind === "usage.threshold_exceeded").length,
+      f.store.events(root.id).filter((e) => e.kind === "usage.reminder").length,
       1,
     );
   } finally {
@@ -177,7 +174,7 @@ test("observe mode still enforces depth, lifetime Agent count, concurrency and p
     f.store.observeNativeUsage(a.attempt.id, 1, 10);
     f.store.finish(a.attempt.id, 1, "completed", "done");
     assert.throws(() => run(f.store, root.id), /lifetime Turn limit/);
-    assert.ok(f.store.executionStatus(root.tree_id).remainingTurns > 0);
+    assert.notEqual(f.store.executionStatus(root.tree_id).remainingTurns, 0);
     const b = run(f.store, child.id);
     assert.throws(
       () => f.store.spawn(b.actor, "too-deep", work),
@@ -240,7 +237,7 @@ test("legacy schema 5 trees retain enforcement and derived lifetime bounds witho
     assert.equal(f.store.attempt(a.attempt.id).turn_id, a.actor.turnId);
     assert.equal(
       f.store.db.prepare("SELECT version FROM schema_version").get()?.version,
-      9,
+      12,
     );
     assert.equal(f.store.executionStatus(root.tree_id).usedTurns, 1);
   } finally {
@@ -301,5 +298,128 @@ test("coordinator view and wait allow low-threshold work but explain tree Turn e
   } finally {
     await coordinator.stop();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("operator can remove both Turn ceilings without resetting usage, bindings, or structural limits", () => {
+  const f = fixture();
+  try {
+    const root = f.store.createRoot("A", "work", {
+      ...limits,
+      maxTurnsPerAgent: 1,
+      maxTotalTurns: 1,
+    });
+    const first = run(f.store, root.id);
+    f.store.finish(first.attempt.id, 1, "completed", "done");
+    const binding = f.store.binding(root.id);
+    assert.throws(() => run(f.store, root.id), /Turn limit/);
+    f.store.setTurnLimits(
+      root.id,
+      { maxTotalTurns: null, maxTurnsPerAgent: null },
+      "Explicit user authorization for one-shot research",
+    );
+    for (let i = 0; i < 105; i++) {
+      const a = run(f.store, root.id);
+      f.store.finish(a.attempt.id, 1, "completed", "done");
+    }
+    assert.equal(f.store.executionStatus(root.tree_id).usedTurns, 106);
+    assert.equal(f.store.executionStatus(root.tree_id).remainingTurns, null);
+    assert.equal(f.store.executionStatus(root.tree_id).maxTurnsPerAgent, null);
+    assert.equal(f.store.executionStatus(root.tree_id).maxTotalTurns, null);
+    assert.equal(f.store.limits(root.tree_id).maxAgents, limits.maxAgents);
+    assert.equal(
+      f.store.limits(root.tree_id).maxConcurrentTurns,
+      limits.maxConcurrentTurns,
+    );
+    f.reopen();
+    assert.deepEqual(f.store.binding(root.id), binding);
+    assert.equal(f.store.agent(root.id).turns, 106);
+    assert.equal(f.store.limits(root.tree_id).maxTotalTurns, null);
+    const before = f.store.limits(root.tree_id);
+    assert.throws(
+      () =>
+        f.store.setTurnLimits(
+          root.id,
+          { maxTotalTurns: 105 },
+          "invalid reduction",
+        ),
+      /below retained usage/,
+    );
+    assert.deepEqual(f.store.limits(root.tree_id), before);
+    assert.equal(
+      f.store.events(root.id).filter((e) => e.kind === "limits.updated").length,
+      1,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("new trees can explicitly select unlimited Turns; default ceilings remain 20 and 100", () => {
+  const f = fixture();
+  try {
+    const a = f.store.createRoot("A", "work", {
+      ...limits,
+      maxTotalTurns: null,
+      maxTurnsPerAgent: null,
+    });
+    assert.equal(f.store.executionStatus(a.tree_id).remainingTurns, null);
+    const { maxTotalTurns: ignored, ...withoutTotal } = limits;
+    const b = f.store.createRoot("B", "work", {
+      ...withoutTotal,
+      maxTurnsPerAgent: 20,
+    });
+    assert.equal(f.store.executionStatus(b.tree_id).maxTotalTurns, 100);
+    assert.equal(f.store.executionStatus(b.tree_id).maxTurnsPerAgent, 20);
+    assert.throws(
+      () => spawnInput({ requestKey: "bad", ...work, maxTotalTurns: null }),
+      /Unknown/,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("offline operator CLI refuses a live owner and records unlimited updates after ownership release", () => {
+  const f = fixture();
+  try {
+    const root = f.store.createRoot("A", "work", limits);
+    const args = [
+      "scripts/cat.mjs",
+      "limits",
+      "--state",
+      f.directory,
+      "--target",
+      root.id,
+      "--max-total-turns",
+      "unlimited",
+      "--max-turns",
+      "unlimited",
+      "--reason",
+      "explicit operator request",
+      "--offline",
+    ];
+    assert.throws(
+      () => execFileSync(process.execPath, args, { stdio: "pipe" }),
+      (e: unknown) =>
+        String((e as { stderr: Buffer }).stderr).includes("owns this database"),
+    );
+    f.store.close();
+    const result = JSON.parse(
+      execFileSync(process.execPath, args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    assert.equal(result.maxTotalTurns, null);
+    assert.equal(result.maxTurnsPerAgent, null);
+    assert.equal(result.usedTurns, 0);
+    f.reopen();
+    assert.equal(
+      f.store.events(root.id).filter((e) => e.kind === "limits.updated").length,
+      1,
+    );
+  } finally {
+    f.close();
   }
 });

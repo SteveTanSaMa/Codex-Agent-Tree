@@ -15,10 +15,16 @@ export type ServerRequestHandler = (
 ) => void;
 export class RpcFailure extends Error {
   readonly delivery: "not-sent" | "unknown";
-  constructor(message: string, delivery: "not-sent" | "unknown") {
+  readonly rpcCode: number | undefined;
+  constructor(
+    message: string,
+    delivery: "not-sent" | "unknown",
+    rpcCode?: number,
+  ) {
     super(message);
     this.name = "RpcFailure";
     this.delivery = delivery;
+    this.rpcCode = rpcCode;
   }
 }
 interface Pending {
@@ -132,6 +138,7 @@ export class CodexJsonRpcClient {
             new RpcFailure(
               `RPC error ${f.error.code ?? "unknown"}: ${f.error.message ?? "request failed"}`,
               "unknown",
+              f.error.code,
             ),
           )
         : p.resolve(f.result);

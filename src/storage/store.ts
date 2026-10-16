@@ -10,6 +10,8 @@ import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { requireCondition, text, integer } from "../core/errors.ts";
 import { TaskBoard } from "./task-board.ts";
+import { InteractionState } from "./interaction.ts";
+import { TokenReminders } from "./token-reminders.ts";
 
 type Row = Record<string, unknown>;
 export type DesiredState = "active" | "paused" | "cancelled" | "terminated";
@@ -43,12 +45,12 @@ export interface Actor {
 }
 export interface TreeLimits {
   tokenPolicy?: "observe" | "enforce";
-  maxTotalTurns?: number;
+  maxTotalTurns?: number | null;
   tokens: number;
   maxDepth: number;
   maxAgents: number;
   maxConcurrentTurns: number;
-  maxTurnsPerAgent: number;
+  maxTurnsPerAgent: number | null;
   turnReservation: number;
 }
 export interface Message {
@@ -108,13 +110,16 @@ export class Store {
   readonly ownerId = randomUUID();
   readonly generation: number;
   readonly tasks: TaskBoard;
+  readonly interaction: InteractionState;
+  readonly reminders: TokenReminders;
   private commitWaiters = new Set<() => void>();
   private closed = false;
   private runtimeGeneration = 0;
   private drainingReceipts = false;
   constructor(path: string) {
+    let upgradeReminders = false;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
+    this.db = new DatabaseSync(path, { timeout: 5000 });
     chmodSync(path, 0o600);
     try {
       this.db.exec(
@@ -156,12 +161,14 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7, 8, 9].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
         "Unsupported business schema version",
       );
+      upgradeReminders =
+        Number(this.one("SELECT version FROM schema_version")?.version) < 12;
       if (
         this.all("PRAGMA table_info(runtime_connections)").some(
           (c) => c.name === "native_pid" && c.notnull === 1,
@@ -259,7 +266,16 @@ export class Store {
         CREATE TRIGGER IF NOT EXISTS message_enqueue_order AFTER INSERT ON messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
         CREATE TRIGGER IF NOT EXISTS operator_enqueue_order AFTER INSERT ON operator_messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
       `);
-      this.run("UPDATE schema_version SET version=9");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS immediate_pauses(agent_id TEXT PRIMARY KEY REFERENCES agents(id));
+        CREATE TABLE IF NOT EXISTS operator_guidance(message_id TEXT PRIMARY KEY REFERENCES operator_messages(id),agent_id TEXT NOT NULL REFERENCES agents(id),mode TEXT NOT NULL,state TEXT NOT NULL,attempt_id TEXT,turn_id TEXT,reason TEXT);
+        CREATE TABLE IF NOT EXISTS tree_interaction(tree_id TEXT PRIMARY KEY REFERENCES trees(id),policy TEXT NOT NULL,started_ms INTEGER,epoch_ms INTEGER,warned INTEGER NOT NULL DEFAULT 0,paused INTEGER NOT NULL DEFAULT 0,stall_marker INTEGER,error_marker INTEGER);
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS token_reminders(scope TEXT NOT NULL,target_id TEXT NOT NULL,policy TEXT NOT NULL,last_threshold INTEGER,PRIMARY KEY(scope,target_id));
+        CREATE TABLE IF NOT EXISTS token_usage_samples(thread_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),cumulative INTEGER NOT NULL,breakdown TEXT NOT NULL);
+      `);
+      this.run("UPDATE schema_version SET version=12");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -306,6 +322,21 @@ export class Store {
       event: (agent, kind, body) => this.event(agent, kind, body),
     });
     this.applyPendingReceipts();
+    this.interaction = new InteractionState({
+      db: this.db,
+      transact: (operation) => this.transaction(operation),
+      agent: (id) => this.agent(id),
+      attempts: (id) => this.attempts(id),
+      event: (agent, kind, body) => this.event(agent, kind, body),
+    });
+    this.interaction.recover();
+    this.reminders = new TokenReminders({
+      db: this.db,
+      transact: (fn) => this.transaction(fn),
+      agent: (id) => this.agent(id),
+      event: (agent, kind, body) => this.event(agent, kind, body),
+    });
+    this.reminders.initialize(upgradeReminders);
   }
   private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
     return this.db.prepare(sql).get(...params) as Row | undefined;
@@ -376,7 +407,11 @@ export class Store {
       ...limits,
       tokenPolicy: limits.tokenPolicy ?? "enforce",
       maxTotalTurns:
-        limits.maxTotalTurns ?? limits.maxAgents * limits.maxTurnsPerAgent,
+        limits.maxTotalTurns === undefined
+          ? limits.maxTurnsPerAgent === null
+            ? null
+            : limits.maxAgents * limits.maxTurnsPerAgent
+          : limits.maxTotalTurns,
     };
   }
   binding(id: string): Binding | undefined {
@@ -554,15 +589,15 @@ export class Store {
       "maxDepth",
       "maxAgents",
       "maxConcurrentTurns",
-      "maxTurnsPerAgent",
       "turnReservation",
     ] as const)
       integer(limits[key], key, key === "maxDepth" ? 0 : 1);
-    const maxTotalTurns = integer(
-      limits.maxTotalTurns ?? 100,
-      "maxTotalTurns",
-      1,
-    );
+    if (limits.maxTurnsPerAgent !== null)
+      integer(limits.maxTurnsPerAgent, "maxTurnsPerAgent", 1);
+    const maxTotalTurns =
+      limits.maxTotalTurns === null
+        ? null
+        : integer(limits.maxTotalTurns ?? 100, "maxTotalTurns", 1);
     requireCondition(
       policy === "observe" || limits.turnReservation <= limits.tokens,
       "INVALID_INPUT",
@@ -595,10 +630,19 @@ export class Store {
         name,
         "root",
         task,
-        limits.tokens,
+        policy === "enforce" ? limits.tokens : 0,
         treeId,
       );
       this.rootWorkspace(root.id);
+      this.run(
+        "INSERT INTO token_reminders VALUES('tree',?,?,NULL)",
+        treeId,
+        JSON.stringify({
+          metric: "total",
+          thresholdTokens: limits.tokens,
+          repeatEveryTokens: null,
+        }),
+      );
       this.run(
         "INSERT INTO root_requests VALUES(?,?,?)",
         requestKey,
@@ -752,6 +796,14 @@ export class Store {
       "STATE_BLOCKED",
       "Unreconciled native execution blocks dispatch",
     );
+    requireCondition(
+      !this.one(
+        "SELECT message_id FROM operator_guidance WHERE agent_id=? AND state='unknown'",
+        agent.id,
+      ),
+      "STATE_BLOCKED",
+      "Unknown guidance delivery requires operator review",
+    );
   }
   budgetStatus(treeId: string) {
     const totals = this.one(
@@ -771,17 +823,33 @@ export class Store {
     );
     const spent = Number(totals.spent ?? 0);
     const reserved = Number(totals.reserved ?? 0);
+    const enforced = this.limits(treeId).tokenPolicy === "enforce";
+    const reminder = this.one(
+      "SELECT policy FROM token_reminders WHERE scope='tree' AND target_id=?",
+      treeId,
+    );
+    const reminderPolicy = reminder
+      ? JSON.parse(String(reminder.policy))
+      : undefined;
+    const threshold =
+      reminderPolicy === undefined
+        ? tokens
+        : reminderPolicy?.metric === "total"
+          ? reminderPolicy.thresholdTokens
+          : null;
     return {
       tokenPolicy: this.limits(treeId).tokenPolicy!,
       enforced: this.limits(treeId).tokenPolicy === "enforce",
-      warningThresholdTokens: tokens,
+      warningThresholdTokens: threshold,
       observedTokens,
-      warningExceeded: observedTokens > tokens,
+      warningExceeded: threshold !== null && observedTokens >= threshold,
       tokens,
       spent,
       reserved,
-      availableTokens: Math.max(0, tokens - spent - reserved),
-      excessLiabilityTokens: Math.max(0, spent + reserved - tokens),
+      availableTokens: enforced ? Math.max(0, tokens - spent - reserved) : null,
+      excessLiabilityTokens: enforced
+        ? Math.max(0, spent + reserved - tokens)
+        : 0,
       unknownUsageAttempts: unknown,
     };
   }
@@ -796,13 +864,64 @@ export class Store {
     return {
       maxTotalTurns: limits.maxTotalTurns!,
       usedTurns,
-      remainingTurns: Math.max(0, limits.maxTotalTurns! - usedTurns),
+      remainingTurns:
+        limits.maxTotalTurns === null
+          ? null
+          : Math.max(0, limits.maxTotalTurns! - usedTurns),
       maxAgents: limits.maxAgents,
       createdAgents: this.agents(treeId).length,
       maxConcurrentTurns: limits.maxConcurrentTurns,
       maxDepth: limits.maxDepth,
       maxTurnsPerAgent: limits.maxTurnsPerAgent,
     };
+  }
+  /** Operator-only adjustment. No counters, identities or lifecycle fences are reset. */
+  setTurnLimits(
+    target: string,
+    patch: { maxTotalTurns?: number | null; maxTurnsPerAgent?: number | null },
+    reason: string,
+  ) {
+    text(reason, "limit change reason", 2048);
+    requireCondition(
+      patch &&
+        typeof patch === "object" &&
+        Object.keys(patch).length > 0 &&
+        Object.keys(patch).every((k) =>
+          ["maxTotalTurns", "maxTurnsPerAgent"].includes(k),
+        ),
+      "INVALID_INPUT",
+      "Expected Turn limit fields only",
+    );
+    for (const value of Object.values(patch))
+      if (value !== null) integer(value!, "Turn limit", 1);
+    return this.transaction(() => {
+      const agent = this.agent(target),
+        before = this.limits(agent.tree_id);
+      const after = { ...before, ...patch };
+      const members = this.agents(agent.tree_id),
+        used = members.reduce((n, a) => n + a.turns, 0);
+      requireCondition(
+        (after.maxTotalTurns === null || after.maxTotalTurns! >= used) &&
+          (after.maxTurnsPerAgent === null ||
+            members.every((a) => after.maxTurnsPerAgent! >= a.turns)),
+        "CONFLICT",
+        "Cannot set a Turn limit below retained usage",
+      );
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        this.run(
+          "UPDATE trees SET limits_json=? WHERE id=?",
+          JSON.stringify(after),
+          agent.tree_id,
+        );
+        this.event(agent, "limits.updated", {
+          before,
+          after,
+          reason,
+          source: "operator",
+        });
+      }
+      return this.executionStatus(agent.tree_id);
+    });
   }
   private admitGlobal(agent: Agent, reservation: number) {
     const pool = this.budgetStatus(agent.tree_id);
@@ -879,7 +998,7 @@ export class Store {
         "Depth or lifetime Agent limit reached",
       );
       requireCondition(
-        this.executionStatus(parent.tree_id).remainingTurns > 0,
+        this.executionStatus(parent.tree_id).remainingTurns !== 0,
         "STATE_BLOCKED",
         "Tree lifetime Turn limit reached",
       );
@@ -1158,8 +1277,9 @@ export class Store {
       const limits = this.limits(agent.tree_id);
       this.admitGlobal(agent, limits.turnReservation);
       requireCondition(
-        agent.turns < limits.maxTurnsPerAgent &&
-          this.executionStatus(agent.tree_id).remainingTurns > 0,
+        (limits.maxTurnsPerAgent === null ||
+          agent.turns < limits.maxTurnsPerAgent) &&
+          this.executionStatus(agent.tree_id).remainingTurns !== 0,
         "STATE_BLOCKED",
         "Agent or tree lifetime Turn limit reached",
       );
@@ -1324,6 +1444,7 @@ export class Store {
         id,
         tokens,
       );
+      this.reminders.check(a.agent_id);
     });
   }
   acknowledge(actor: Actor, messageIds: string[]) {
@@ -1440,6 +1561,7 @@ export class Store {
     targetId: string,
     action: "pause" | "resume" | "cancel" | "terminate",
     scope: "agent" | "subtree" = "subtree",
+    immediate = false,
   ): Attempt[] {
     return this.transaction(() => {
       const target = this.agent(targetId);
@@ -1452,6 +1574,16 @@ export class Store {
         );
       const targets = scope === "subtree" ? this.subtree(targetId) : [target];
       for (const previous of targets) {
+        if (!actor && action === "pause" && immediate)
+          this.run(
+            "INSERT OR IGNORE INTO immediate_pauses VALUES(?)",
+            previous.id,
+          );
+        if (!actor && action === "resume")
+          this.run(
+            "DELETE FROM immediate_pauses WHERE agent_id=?",
+            previous.id,
+          );
         requireCondition(
           previous.desired !== "terminated" || action === "terminate",
           "STATE_BLOCKED",
@@ -1874,6 +2006,13 @@ export class Store {
         },
         id,
       );
+      this.reminders.sample(
+        agent.id,
+        a.thread_id,
+        cumulativeTokens,
+        breakdown?.total,
+      );
+      this.reminders.check(agent.id);
       const pool = this.budgetStatus(agent.tree_id);
       if (pool.enforced) {
         if (
@@ -1881,8 +2020,6 @@ export class Store {
           previousPool.excessLiabilityTokens === 0
         )
           this.event(agent, "budget.tree_overcommitted", pool, id);
-      } else if (pool.warningExceeded && !previousPool.warningExceeded) {
-        this.event(agent, "usage.threshold_exceeded", pool, id);
       }
     });
     this.applyPendingReceipts();
@@ -2034,6 +2171,7 @@ export class Store {
         id,
       );
       this.releaseTerminated(a.agent_id);
+      this.reminders?.check(a.agent_id);
     });
     this.applyPendingReceipts();
   }

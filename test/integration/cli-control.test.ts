@@ -133,3 +133,110 @@ test("CLI responses preserve UTF-8 split inside a character", async () => {
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test("public Skill forwards steering, immediate pause and explicit policy commands", async () => {
+  const state = mkdtempSync("/tmp/cat-interactive-cli-");
+  writeFileSync(join(state, "operator-token"), "fixture-secret");
+  const requests: { method: string; params: Record<string, unknown> }[] = [];
+  const server = createServer((socket) => {
+    let data = "";
+    socket.on("data", (chunk) => {
+      data += String(chunk);
+      if (!data.includes("\n")) return;
+      const r = JSON.parse(data.trim());
+      requests.push(r);
+      socket.end(JSON.stringify({ result: { ok: true } }) + "\n");
+    });
+  });
+  await new Promise<void>((r) => server.listen(join(state, "control.sock"), r));
+  const call = (...args: string[]) =>
+    execute(process.execPath, ["scripts/cat.mjs", ...args, "--state", state], {
+      timeout: 5000,
+    });
+  try {
+    await call(
+      "steer",
+      "--target",
+      "A",
+      "--message",
+      "correct",
+      "--key",
+      "stable",
+    );
+    assert.equal(requests.at(-1)!.method, "send");
+    assert.equal(requests.at(-1)!.params.delivery, "steer");
+    await call(
+      "send",
+      "--target",
+      "A",
+      "--message",
+      "later",
+      "--delivery",
+      "queue",
+    );
+    assert.equal(requests.at(-1)!.params.delivery, "queue");
+    await call("control", "--target", "A", "--action", "pause", "--immediate");
+    assert.equal(requests.at(-1)!.params.immediate, true);
+    await call(
+      "root",
+      "--task",
+      "work",
+      "--mode",
+      "batch",
+      "--task-token-budget",
+      "5000",
+    );
+    assert.equal(requests.at(-1)!.params.mode, "batch");
+    assert.equal(requests.at(-1)!.params.taskTokenBudget, "5000");
+    await call(
+      "token-reminder",
+      "--target",
+      "A",
+      "--scope",
+      "tree",
+      "--threshold",
+      "100",
+      "--every",
+      "50",
+      "--metric",
+      "output",
+    );
+    assert.equal(requests.at(-1)!.method, "token-reminder");
+    assert.deepEqual(requests.at(-1)!.params.policy, {
+      metric: "output",
+      thresholdTokens: 100,
+      repeatEveryTokens: 50,
+    });
+    await call("token-reminder", "--target", "A", "--disable");
+    assert.equal(requests.at(-1)!.params.policy, null);
+    writeFileSync(
+      join(state, "policy.json"),
+      JSON.stringify({ autonomyPauseMs: 60000 }),
+    );
+    await call(
+      "interaction",
+      "--target",
+      "A",
+      "--input-file",
+      join(state, "policy.json"),
+    );
+    assert.equal(requests.at(-1)!.method, "interaction");
+    await call("check-in", "--target", "A");
+    assert.equal(requests.at(-1)!.method, "check-in");
+    await call(
+      "guidance-resolve",
+      "--target",
+      "A",
+      "--message-id",
+      "M",
+      "--outcome",
+      "retry-next",
+      "--reason",
+      "reviewed",
+    );
+    assert.equal(requests.at(-1)!.params.outcome, "retry-next");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(state, { recursive: true, force: true });
+  }
+});
