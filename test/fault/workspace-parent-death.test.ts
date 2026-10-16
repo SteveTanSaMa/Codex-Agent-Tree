@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { workspacePolicy } from "../../src/workspace/broker.ts";
 test(
   "SIGKILL of test host closes supervisor pipe and stops its sandboxed process group",
   { timeout: 10000 },
@@ -26,11 +27,16 @@ test(
       join(repo, "linger.mjs"),
       "import fs from 'node:fs';fs.writeFileSync('owned-pid',String(process.pid));setInterval(()=>{},1000);",
     );
-    const policy = {
-      repository: repo,
-      baseCommit: "a".repeat(40),
-      tests: { linger: { executable: process.execPath, args: ["linger.mjs"] } },
-    };
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
+    git(["init"]);
+    git(["config", "user.name", "Fixture"]);
+    git(["config", "user.email", "fixture@example.invalid"]);
+    git(["add", "."]);
+    git(["commit", "-m", "fixture"]);
+    const policy = workspacePolicy(repo, {
+      linger: { executable: process.execPath, args: ["linger.mjs"] },
+    });
     const host = spawn(
       process.execPath,
       [

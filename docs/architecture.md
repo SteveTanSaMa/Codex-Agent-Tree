@@ -31,3 +31,7 @@ Codex 对话 → Skill CLI → 本地认证 socket → Coordinator ↔ 业务 SQ
 ## 后续决策门槛
 
 限定 MVP 已验证真实递归、消息唤醒、退出续跑和明确故障注入点恢复。并发编码/worktree、自动 DAG 执行、交互审批和多机不在范围。扩展前需对比单 Agent 与团队：固定任务/输入/质量评分，记录时间、总 tokens、成功率、人工介入次数；尚无数据证明团队普遍更好或更便宜。
+
+## 多仓库与 worktree
+
+WorkspaceBroker 将 Repository、Agent 和工作目录所有者分开：原生 Thread 的 cwd 固定到 Agent 主仓库，受限工具通过 repositoryId 选择已授予仓库。schema 9 的 workspace_registry 固定操作者配置，agent_workspaces 在 root/spawn 事务内保存主仓库、授权集合和 isolated/inherit 模式。重复 spawn 的内容指纹包含仓库选择。工作树键是 (owner_agent_id, repository_id)，ready marker 持有双方身份；文件系统不与 SQLite 假装组成同一原子事务，未完成 provisioning 继续保守阻断。命令锁按实际 cwd 和依赖读目录记录。详见[设计与验证](multi-repository-plan.md)。

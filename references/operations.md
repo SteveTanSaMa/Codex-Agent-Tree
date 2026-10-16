@@ -113,9 +113,9 @@ Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login 
 
 ## Usage evidence reconciliation
 
-Current source upgrades to schema 8. Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+Current main upgrades to schema 9, adding an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Older source refuses schema 8. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Older source refuses schema 9. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Third-party provider configuration
 

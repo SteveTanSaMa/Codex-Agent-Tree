@@ -1,3 +1,8 @@
+import type {
+  WorkspacePolicy,
+  WorkspaceAssignment,
+  WorkspaceSelection,
+} from "../workspace/broker.ts";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -151,7 +156,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7, 8].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -244,6 +249,8 @@ export class Store {
       // One durable sequence across both message sources. Legacy ties have no
       // recoverable insertion order; preserve their previous deterministic order.
       this.db.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_registry(singleton INTEGER PRIMARY KEY CHECK(singleton=1), policy TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_workspaces(agent_id TEXT PRIMARY KEY REFERENCES agents(id), assignment TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS usage_receipts(sequence INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES turn_attempts(id), tokens INTEGER NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', UNIQUE(attempt_id,tokens));
         CREATE TABLE IF NOT EXISTS workspace_commands(agent_id TEXT NOT NULL REFERENCES agents(id), call_id TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL, PRIMARY KEY(agent_id,call_id));
         CREATE TABLE IF NOT EXISTS message_order(sequence INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE);
@@ -252,7 +259,7 @@ export class Store {
         CREATE TRIGGER IF NOT EXISTS message_enqueue_order AFTER INSERT ON messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
         CREATE TRIGGER IF NOT EXISTS operator_enqueue_order AFTER INSERT ON operator_messages BEGIN INSERT INTO message_order(message_id) VALUES(NEW.id); END;
       `);
-      this.run("UPDATE schema_version SET version=8");
+      this.run("UPDATE schema_version SET version=9");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -406,6 +413,130 @@ export class Store {
     });
     return agent;
   }
+  configureWorkspace(policy?: WorkspacePolicy) {
+    const canonical = (value: unknown): string =>
+      JSON.stringify(value, (_key, v) =>
+        v && typeof v === "object" && !Array.isArray(v)
+          ? Object.fromEntries(
+              Object.keys(v)
+                .sort()
+                .map((k) => [k, v[k]]),
+            )
+          : v,
+      );
+    this.transaction(() => {
+      const previous = this.one(
+        "SELECT policy FROM workspace_registry WHERE singleton=1",
+      );
+      if (previous) {
+        requireCondition(
+          policy && previous.policy === canonical(policy),
+          "CONFLICT",
+          "Workspace registry is immutable for this state; restore its original configuration",
+        );
+        return;
+      }
+      if (!policy) return;
+      requireCondition(
+        !policy.repositories || this.agents().length === 0,
+        "CONFLICT",
+        "Multi-repository configuration requires a new state",
+      );
+      this.run("INSERT INTO workspace_registry VALUES(1,?)", canonical(policy));
+      // Legacy coding states retain their paths, bindings and nearest-parent ownership.
+      for (const agent of this.agents())
+        this.saveWorkspace(agent.id, {
+          repositoryId: "default",
+          repositoryIds: ["default"],
+          worktree:
+            agent.depth === 0
+              ? "original"
+              : agent.depth === 1
+                ? "isolated"
+                : "inherit",
+        });
+    });
+  }
+  workspaceAssignment(agentId: string): WorkspaceAssignment {
+    this.agent(agentId);
+    const row = this.one(
+      "SELECT assignment FROM agent_workspaces WHERE agent_id=?",
+      agentId,
+    );
+    requireCondition(
+      row,
+      "FORBIDDEN",
+      "Agent has no coding workspace authorization",
+    );
+    return JSON.parse(String(row.assignment)) as WorkspaceAssignment;
+  }
+  private saveWorkspace(agentId: string, assignment: WorkspaceAssignment) {
+    this.run(
+      "INSERT INTO agent_workspaces VALUES(?,?)",
+      agentId,
+      JSON.stringify(assignment),
+    );
+  }
+  private rootWorkspace(agentId: string) {
+    const row = this.one(
+      "SELECT policy FROM workspace_registry WHERE singleton=1",
+    );
+    if (!row) return;
+    const policy = JSON.parse(String(row.policy)) as WorkspacePolicy;
+    this.saveWorkspace(agentId, {
+      repositoryId: policy.defaultRepository ?? "default",
+      repositoryIds: Object.keys(
+        policy.repositories ?? { default: policy },
+      ).sort(),
+      worktree: "original",
+    });
+  }
+  private childWorkspace(
+    parent: Agent,
+    childId: string,
+    input: WorkspaceSelection,
+  ) {
+    const registry = this.one(
+      "SELECT policy FROM workspace_registry WHERE singleton=1",
+    );
+    if (!registry) {
+      requireCondition(
+        input.repositoryId === undefined &&
+          input.repositoryIds === undefined &&
+          input.worktree === undefined,
+        "FORBIDDEN",
+        "No coding workspace was authorized",
+      );
+      return;
+    }
+    const grant = this.workspaceAssignment(parent.id);
+    const primary = input.repositoryId ?? grant.repositoryId;
+    const ids = input.repositoryIds ?? [primary];
+    const worktree =
+      input.worktree ?? (parent.depth === 0 ? "isolated" : "inherit");
+    requireCondition(
+      typeof primary === "string" &&
+        Array.isArray(ids) &&
+        ids.length > 0 &&
+        ids.length <= 16 &&
+        new Set(ids).size === ids.length &&
+        ids.includes(primary) &&
+        ids.every((id) => grant.repositoryIds.includes(id)),
+      "FORBIDDEN",
+      "Child repositories must be a nonempty subset of the parent grant, including its primary repository",
+    );
+    requireCondition(
+      (worktree === "isolated" || worktree === "inherit") &&
+        !(parent.depth === 0 && worktree === "inherit"),
+      "FORBIDDEN",
+      "Second-level Agents require isolated worktrees",
+    );
+    this.saveWorkspace(childId, {
+      repositoryId: primary,
+      repositoryIds: [...ids].sort(),
+      worktree,
+    });
+  }
   createRoot(
     name: string,
     task: string,
@@ -467,6 +598,7 @@ export class Store {
         limits.tokens,
         treeId,
       );
+      this.rootWorkspace(root.id);
       this.run(
         "INSERT INTO root_requests VALUES(?,?,?)",
         requestKey,
@@ -725,7 +857,12 @@ export class Store {
   spawn(
     actor: Actor,
     key: string,
-    input: { name: string; role: string; task: string; tokens?: number },
+    input: {
+      name: string;
+      role: string;
+      task: string;
+      tokens?: number;
+    } & WorkspaceSelection,
   ): Agent {
     if (input.tokens !== undefined) integer(input.tokens, "child tokens", 1);
     return this.transaction(() => {
@@ -773,6 +910,7 @@ export class Store {
         limits.tokenPolicy === "enforce" ? allocation : 0,
         parent.tree_id,
       );
+      this.childWorkspace(parent, child.id, input);
       const source = this.one(
         "SELECT trace_id FROM turn_attempts WHERE thread_id=? AND turn_id=?",
         actor.threadId,

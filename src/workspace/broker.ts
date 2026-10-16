@@ -14,7 +14,14 @@ import {
   fsyncSync,
   closeSync,
 } from "node:fs";
-import { join, resolve, relative, isAbsolute, dirname } from "node:path";
+import {
+  join,
+  resolve,
+  relative,
+  isAbsolute,
+  dirname,
+  basename,
+} from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { requireCondition, text } from "../core/errors.ts";
@@ -25,7 +32,25 @@ export interface TestCommand {
   executable: string;
   args: string[];
 }
+export interface RepositoryPolicy {
+  repository: string;
+  baseCommit: string;
+  tests: Record<string, TestCommand>;
+  directory?: string;
+}
+export interface WorkspaceAssignment {
+  repositoryId: string;
+  repositoryIds: string[];
+  worktree: "isolated" | "inherit" | "original";
+}
+export interface WorkspaceSelection {
+  repositoryId?: string;
+  repositoryIds?: string[];
+  worktree?: "isolated" | "inherit";
+}
 export interface WorkspacePolicy {
+  defaultRepository?: string;
+  repositories?: Record<string, RepositoryPolicy>;
   repository: string;
   baseCommit: string;
   tests: Record<string, TestCommand>;
@@ -111,7 +136,155 @@ export function workspacePolicy(
   validatePolicy(policy);
   return policy;
 }
-export function validatePolicy(policy: WorkspacePolicy) {
+export function repositories(
+  policy: WorkspacePolicy,
+): Record<string, RepositoryPolicy> {
+  return policy.repositories ?? { default: policy };
+}
+export function defaultRepository(policy: WorkspacePolicy): string {
+  return policy.defaultRepository ?? "default";
+}
+/** Operator input only. Capture each repository's HEAD once, before creating a team. */
+export function multiWorkspacePolicy(value: unknown): WorkspacePolicy {
+  requireCondition(
+    value && typeof value === "object" && !Array.isArray(value),
+    "INVALID_INPUT",
+    "Expected workspace manifest",
+  );
+  const manifest = value as Record<string, unknown>;
+  requireCondition(
+    Object.keys(manifest).every((k) =>
+      ["defaultRepository", "repositories"].includes(k),
+    ) &&
+      typeof manifest.defaultRepository === "string" &&
+      manifest.repositories &&
+      typeof manifest.repositories === "object" &&
+      !Array.isArray(manifest.repositories),
+    "INVALID_INPUT",
+    "Invalid workspace manifest",
+  );
+  requireCondition(
+    Object.keys(manifest.repositories).length > 0 &&
+      Object.keys(manifest.repositories).length <= 16,
+    "INVALID_INPUT",
+    "Register between 1 and 16 repositories",
+  );
+  const registry: Record<string, RepositoryPolicy> = Object.create(null);
+  for (const [id, input] of Object.entries(manifest.repositories)) {
+    requireCondition(
+      input && typeof input === "object" && !Array.isArray(input),
+      "INVALID_INPUT",
+      "Invalid repository entry",
+    );
+    const entry = input as Record<string, unknown>;
+    requireCondition(
+      Object.keys(entry).every((k) =>
+        ["path", "directory", "tests"].includes(k),
+      ) &&
+        typeof entry.path === "string" &&
+        (entry.directory === undefined || typeof entry.directory === "string"),
+      "INVALID_INPUT",
+      "Invalid repository entry",
+    );
+    registry[id] = {
+      ...workspacePolicy(
+        entry.path,
+        (entry.tests ?? {}) as Record<string, TestCommand>,
+      ),
+      directory: (entry.directory as string) ?? basename(resolve(entry.path)),
+    };
+  }
+  requireCondition(
+    Object.hasOwn(registry, manifest.defaultRepository),
+    "INVALID_INPUT",
+    "Unknown default repository",
+  );
+  const policy: WorkspacePolicy = {
+    ...registry[manifest.defaultRepository]!,
+    defaultRepository: manifest.defaultRepository,
+    repositories: registry,
+  };
+  validateWorkspacePolicy(policy);
+  return policy;
+}
+export function validateWorkspacePolicy(policy: WorkspacePolicy) {
+  validatePolicy(policy);
+  const registry = repositories(policy);
+  const ids = Object.keys(registry);
+  requireCondition(
+    ids.length > 0 &&
+      ids.length <= 16 &&
+      Object.hasOwn(registry, defaultRepository(policy)),
+    "INVALID_INPUT",
+    "Invalid repository registry",
+  );
+  const paths: string[] = [],
+    commons = new Set<string>(),
+    directories = new Set<string>();
+  for (const [id, repo] of Object.entries(registry)) {
+    validatePolicy(repo);
+    requireCondition(
+      /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(id) &&
+        !["__proto__", "constructor", "prototype"].includes(id),
+      "INVALID_INPUT",
+      "Invalid repository ID",
+    );
+    const root = realpathSync(repo.repository);
+    requireCondition(
+      root === repo.repository &&
+        git(root, ["rev-parse", "--show-toplevel"]) === root,
+      "FORBIDDEN",
+      "Repository root changed",
+    );
+    requireCondition(
+      git(root, ["rev-parse", repo.baseCommit + "^{commit}"]) ===
+        repo.baseCommit,
+      "CONFLICT",
+      "Repository base commit unavailable",
+    );
+    const common = realpathSync(
+      resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
+    );
+    requireCondition(
+      !commons.has(common) &&
+        paths.every((p) => !inside(p, root) && !inside(root, p)),
+      "INVALID_INPUT",
+      "Repository roots must be independent and non-nested",
+    );
+    commons.add(common);
+    paths.push(root);
+    if (policy.repositories) {
+      const directory = repo.directory;
+      requireCondition(
+        typeof directory === "string" &&
+          directory.length > 0 &&
+          directory.length <= 128 &&
+          !/[\\/\0]/.test(directory) &&
+          directory !== "." &&
+          directory !== ".." &&
+          !blocked(directory),
+        "INVALID_INPUT",
+        "Invalid repository directory",
+      );
+      const key = directory.normalize("NFC").toLowerCase();
+      requireCondition(
+        !directories.has(key),
+        "INVALID_INPUT",
+        "Repository directories must be unique",
+      );
+      directories.add(key);
+    }
+  }
+  const primary = registry[defaultRepository(policy)]!;
+  requireCondition(
+    policy.repository === primary.repository &&
+      policy.baseCommit === primary.baseCommit &&
+      JSON.stringify(policy.tests) === JSON.stringify(primary.tests),
+    "INVALID_INPUT",
+    "Default repository policy disagrees with registry",
+  );
+}
+export function validatePolicy(policy: RepositoryPolicy) {
   requireCondition(
     isAbsolute(policy.repository) &&
       /^[0-9a-f]{40,64}$/.test(policy.baseCommit),
@@ -154,7 +327,7 @@ function tool(
     description,
     inputSchema: {
       type: "object",
-      properties,
+      properties: { ...properties, repositoryId: string },
       required,
       additionalProperties: false,
     },
@@ -162,6 +335,12 @@ function tool(
 }
 export function workspaceTools(depth: number, tests: string[]): DynamicTool[] {
   return [
+    tool(
+      "workspace_list",
+      "List your authorized repositories, primary repository, worktree owners, paths and approved tests. Other tools accept optional repositoryId; omission selects your primary repository.",
+      {},
+      [],
+    ),
     tool(
       "read_file",
       "Read a workspace-relative UTF-8 file (64 KiB maximum) and its SHA-256 hash. Protected paths and symlinks are refused.",
@@ -176,7 +355,7 @@ export function workspaceTools(depth: number, tests: string[]): DynamicTool[] {
     ),
     tool(
       "git_diff",
-      "Read a bounded tracked-file diff against the team's initial commit. No external diff drivers. Untracked files are listed separately; read_file reads their contents.",
+      "Read a bounded tracked-file diff against the selected repository's initialization commit. No external diff drivers. Untracked files are listed separately; read_file reads their contents.",
       {},
       [],
     ),
@@ -194,7 +373,7 @@ export function workspaceTools(depth: number, tests: string[]): DynamicTool[] {
       ? [
           tool(
             "write_file",
-            "Atomically write a workspace-relative UTF-8 file, up to 64 KiB. Supply expectedHash from read_file; null requires a new file. An identical-content retry is safe. Missing parent directories are created inside your workspace. Your worktree is isolated; report its path and changed files to Lead for review.",
+            "Atomically write a workspace-relative UTF-8 file, up to 64 KiB. Supply expectedHash from read_file; null requires a new file. An identical-content retry is safe. Missing parent directories are created inside your workspace. Second-level worktrees are isolated; report the repository ID, workspace path and changed files to Lead for review.",
             {
               path: string,
               content: string,
@@ -219,41 +398,125 @@ export function workspaceTools(depth: number, tests: string[]): DynamicTool[] {
 /** A host capability broker, not an OS boundary against hostile local processes. */
 export class WorkspaceBroker {
   private paths = new Map<string, string>();
-  private running = new Map<string, AbortController>();
+  private running = new Map<
+    string,
+    { controller: AbortController; workspace: string; reads: string[] }
+  >();
   readonly state: string;
   readonly policy: WorkspacePolicy;
   readonly agent: (id: string) => Agent;
+  readonly assignment: (id: string) => WorkspaceAssignment;
   constructor(
     state: string,
     policy: WorkspacePolicy,
     agent: (id: string) => Agent,
+    assignment?: (id: string) => WorkspaceAssignment,
   ) {
     this.state = realpathSync(state);
     this.policy = policy;
     this.agent = agent;
-    validatePolicy(policy);
-    const repo = realpathSync(policy.repository);
+    validateWorkspacePolicy(policy);
     requireCondition(
-      repo === policy.repository &&
-        !inside(repo, this.state) &&
-        !inside(this.state, repo),
+      !policy.repositories || assignment,
       "FORBIDDEN",
-      "State and workspace must be separate directories",
+      "Multi-repository broker requires persisted Agent workspace grants",
     );
+    this.assignment =
+      assignment ??
+      ((id) => ({
+        repositoryId: defaultRepository(policy),
+        repositoryIds: Object.keys(repositories(policy)),
+        worktree:
+          this.agent(id).depth === 0
+            ? "original"
+            : this.agent(id).depth === 1
+              ? "isolated"
+              : "inherit",
+      }));
+    for (const repo of Object.values(repositories(policy)))
+      assertWorkspaceSeparation(repo.repository, this.state);
   }
-  cwd(agent: Agent): string {
-    if (agent.depth === 0) return this.policy.repository;
-    if (agent.depth >= 2) return this.cwd(this.agent(agent.parent_id!));
-    const prior = this.paths.get(agent.id);
+  selection(agent: Agent, repositoryId?: unknown) {
+    const assignment = this.assignment(agent.id);
+    const id =
+      repositoryId === undefined ? assignment.repositoryId : repositoryId;
+    requireCondition(
+      typeof id === "string" &&
+        assignment.repositoryIds.includes(id) &&
+        Object.hasOwn(repositories(this.policy), id),
+      "FORBIDDEN",
+      "Repository is not granted to this Agent",
+    );
+    return { id, repo: repositories(this.policy)[id]! };
+  }
+  tests(agent: Agent): string[] {
+    return [
+      ...new Set(
+        this.assignment(agent.id).repositoryIds.flatMap((id) =>
+          Object.keys(repositories(this.policy)[id]!.tests),
+        ),
+      ),
+    ];
+  }
+  owner(agent: Agent): Agent {
+    return this.assignment(agent.id).worktree === "inherit"
+      ? this.owner(this.agent(agent.parent_id!))
+      : agent;
+  }
+  describe(agent: Agent) {
+    const assignment = this.assignment(agent.id);
+    return {
+      ...assignment,
+      repositories: assignment.repositoryIds.map((id) => ({
+        repositoryId: id,
+        workspace: this.workspacePath(agent, id),
+        ownerAgentId: this.owner(agent).id,
+        baseCommit: repositories(this.policy)[id]!.baseCommit,
+        tests: Object.keys(repositories(this.policy)[id]!.tests),
+      })),
+    };
+  }
+  private workspacePath(agent: Agent, repositoryId: string): string {
+    const owner = this.owner(agent),
+      repo = repositories(this.policy)[repositoryId]!;
+    return owner.depth === 0
+      ? repo.repository
+      : this.policy.repositories
+        ? join(this.state, "workspaces", owner.id, repo.directory!)
+        : join(this.state, "workspaces", owner.id);
+  }
+  cwd(agent: Agent, repositoryId?: unknown): string {
+    const { id, repo } = this.selection(agent, repositoryId);
+    const owner = this.owner(agent);
+    if (owner.depth === 0) return repo.repository;
+    const cacheKey = owner.id + ":" + id;
+    const prior = this.paths.get(cacheKey);
     if (prior) return prior;
-    const path = join(this.state, "workspaces", agent.id);
+    const path = this.workspacePath(agent, id);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const readyDirectory = join(this.state, "worktree-ready");
+    requireCondition(
+      realpathSync(dirname(path)) === dirname(path),
+      "FORBIDDEN",
+      "Worktree parent directory changed",
+    );
+    const readyDirectory = this.policy.repositories
+      ? join(this.state, "worktree-ready", owner.id)
+      : join(this.state, "worktree-ready");
     mkdirSync(readyDirectory, { recursive: true, mode: 0o700 });
-    const marker = join(readyDirectory, agent.id + ".json");
+    const marker = join(
+      readyDirectory,
+      (this.policy.repositories ? id : owner.id) + ".json",
+    );
     const identity = JSON.stringify({
       path,
-      baseCommit: this.policy.baseCommit,
+      baseCommit: repo.baseCommit,
+      ...(this.policy.repositories
+        ? {
+            repositoryId: id,
+            repository: repo.repository,
+            ownerAgentId: owner.id,
+          }
+        : {}),
     });
     const fresh = !existsSync(path);
     requireCondition(
@@ -265,10 +528,11 @@ export class WorkspaceBroker {
     );
     if (fresh)
       this.sandboxGit(
-        this.policy.repository,
-        ["worktree", "add", "--detach", "--", path, this.policy.baseCommit],
-        agent.id,
-        true,
+        repo.repository,
+        ["worktree", "add", "--detach", "--", path, repo.baseCommit],
+        owner.id,
+        repo,
+        path,
       );
     requireCondition(
       !lstatSync(path).isSymbolicLink() &&
@@ -279,8 +543,8 @@ export class WorkspaceBroker {
         ) ===
           realpathSync(
             resolve(
-              this.policy.repository,
-              git(this.policy.repository, ["rev-parse", "--git-common-dir"]),
+              repo.repository,
+              git(repo.repository, ["rev-parse", "--git-common-dir"]),
             ),
           ),
       "FORBIDDEN",
@@ -301,15 +565,17 @@ export class WorkspaceBroker {
         closeSync(directory);
       }
     }
-    this.paths.set(agent.id, path);
+    this.paths.set(cacheKey, path);
     return path;
   }
   private sandboxGit(
     cwd: string,
     args: string[],
     agentId: string,
-    create = false,
+    repo: RepositoryPolicy,
+    createPath?: string,
   ): string {
+    const create = createPath !== undefined;
     const home = join(this.state, "git-homes", agentId);
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const executable = execFileSync("/usr/bin/which", ["git"], {
@@ -318,8 +584,8 @@ export class WorkspaceBroker {
     }).trim();
     const common = realpathSync(
       resolve(
-        this.policy.repository,
-        git(this.policy.repository, ["rev-parse", "--git-common-dir"]),
+        repo.repository,
+        git(repo.repository, ["rev-parse", "--git-common-dir"]),
       ),
     );
     const command = sandboxCommand(
@@ -339,7 +605,7 @@ export class WorkspaceBroker {
       realpathSync(home),
       create ? join(this.state, "workspaces") : undefined,
       [common],
-      create ? [join(this.state, "workspaces", agentId), common] : [],
+      create ? [createPath!, common] : [],
       true,
     );
     return execFileSync(command.executable, command.args, {
@@ -363,6 +629,7 @@ export class WorkspaceBroker {
     input: unknown,
     directory = false,
     createParents = false,
+    repositoryId?: unknown,
   ): string {
     const path = text(input, "workspace path", 1024);
     const parts = path.split("/");
@@ -373,7 +640,7 @@ export class WorkspaceBroker {
       "FORBIDDEN",
       "Path must stay in the workspace and avoid protected entries",
     );
-    const root = this.cwd(agent);
+    const root = this.cwd(agent, repositoryId);
     let current = root;
     for (const [i, part] of parts.entries()) {
       current = join(current, part);
@@ -393,8 +660,8 @@ export class WorkspaceBroker {
     return current;
   }
   cancel(agentId?: string) {
-    for (const [id, controller] of this.running)
-      if (!agentId || id === agentId) controller.abort();
+    for (const [id, running] of this.running)
+      if (!agentId || id === agentId) running.controller.abort();
   }
   validateCommand(agent: Agent, name: string, value: unknown): TestCommand {
     requireCondition(
@@ -406,7 +673,9 @@ export class WorkspaceBroker {
     requireCondition(
       (name === "terminal" || name === "run_test") &&
         Object.keys(args).every(
-          (k) => k === (name === "terminal" ? "command" : "name"),
+          (k) =>
+            k === "repositoryId" ||
+            k === (name === "terminal" ? "command" : "name"),
         ),
       "INVALID_INPUT",
       "Unknown command argument",
@@ -421,28 +690,42 @@ export class WorkspaceBroker {
       "FORBIDDEN",
       "Only Lead can use terminal",
     );
+    const { repo } = this.selection(agent, args.repositoryId);
     const command =
       name === "terminal"
         ? {
             executable: "/bin/zsh",
             args: ["-f", "-c", text(args.command, "Lead command", 8192)],
           }
-        : typeof args.name === "string" &&
-            Object.hasOwn(this.policy.tests, args.name)
-          ? this.policy.tests[args.name]
+        : typeof args.name === "string" && Object.hasOwn(repo.tests, args.name)
+          ? repo.tests[args.name]
           : undefined;
     requireCondition(
       command,
       "FORBIDDEN",
       "Test name is not operator-approved",
     );
-    this.requireWorkspaceIdle(agent);
+    this.requireWorkspaceIdle(agent, args.repositoryId, true);
     return command;
   }
-  private requireWorkspaceIdle(agent: Agent) {
-    const path = this.cwd(agent);
+  private requireWorkspaceIdle(
+    agent: Agent,
+    repositoryId?: unknown,
+    command = false,
+  ) {
+    const path = this.cwd(agent, repositoryId);
+    const dependencies = command
+      ? this.assignment(agent.id).repositoryIds.map((id) =>
+          this.workspacePath(agent, id),
+        )
+      : [];
     requireCondition(
-      ![...this.running.keys()].some((id) => this.cwd(this.agent(id)) === path),
+      ![...this.running.values()].some(
+        (r) =>
+          r.workspace === path ||
+          (command &&
+            (r.reads.includes(path) || dependencies.includes(r.workspace))),
+      ),
       "STATE_BLOCKED",
       "A command is running in this workspace; wait for its result before file operations",
     );
@@ -455,6 +738,7 @@ export class WorkspaceBroker {
     );
     const args = value as Record<string, unknown>;
     const allowed: Record<string, string[]> = {
+      workspace_list: [],
       read_file: ["path"],
       write_file: ["path", "content", "expectedHash"],
       search_code: ["query", "directory"],
@@ -464,19 +748,33 @@ export class WorkspaceBroker {
     };
     requireCondition(
       allowed[name] &&
-        Object.keys(args).every((k) => allowed[name]!.includes(k)),
+        Object.keys(args).every(
+          (k) => k === "repositoryId" || allowed[name]!.includes(k),
+        ),
       "INVALID_INPUT",
       "Unknown workspace tool or argument",
     );
+    requireCondition(
+      name !== "write_file" || agent.depth <= 1,
+      "FORBIDDEN",
+      "Third-level Agents have read-only access",
+    );
+    const { repo } = this.selection(agent, args.repositoryId);
+    if (name === "workspace_list") return this.describe(agent);
     if (!["run_test", "terminal"].includes(name))
-      this.requireWorkspaceIdle(agent);
-    if (name === "read_file" || name === "write_file") {
-      requireCondition(
-        name !== "write_file" || agent.depth <= 1,
-        "FORBIDDEN",
-        "Third-level Agents have read-only access",
+      this.requireWorkspaceIdle(
+        agent,
+        args.repositoryId,
+        name === "write_file",
       );
-      const path = this.path(agent, args.path, false, name === "write_file");
+    if (name === "read_file" || name === "write_file") {
+      const path = this.path(
+        agent,
+        args.path,
+        false,
+        name === "write_file",
+        args.repositoryId,
+      );
       const entry = lstatSync(path, { throwIfNoEntry: false });
       requireCondition(
         !entry || entry.size <= limit,
@@ -548,11 +846,11 @@ export class WorkspaceBroker {
     }
     if (name === "search_code") {
       const query = text(args.query, "literal query", 256);
-      const root = this.cwd(agent);
+      const root = this.cwd(agent, args.repositoryId);
       const start =
         args.directory === undefined
           ? root
-          : this.path(agent, args.directory, true);
+          : this.path(agent, args.directory, true, false, args.repositoryId);
       const matches: { path: string; line: number; text: string }[] = [];
       let files = 0,
         entries = 0,
@@ -607,7 +905,7 @@ export class WorkspaceBroker {
       return { matches, truncated, filesScanned: files };
     }
     if (name === "git_diff") {
-      const cwd = this.cwd(agent);
+      const cwd = this.cwd(agent, args.repositoryId);
       // Use a protected path exclusion even for tracked secrets; never run configured external drivers.
       const exclusions = [
         ":(exclude,icase)**/.env*",
@@ -629,12 +927,13 @@ export class WorkspaceBroker {
           "diff",
           "--no-ext-diff",
           "--no-textconv",
-          this.policy.baseCommit,
+          repo.baseCommit,
           "--",
           ".",
           ...exclusions,
         ],
         agent.id,
+        repo,
       );
       const untracked = this.sandboxGit(
         cwd,
@@ -647,10 +946,11 @@ export class WorkspaceBroker {
           ...exclusions,
         ],
         agent.id,
+        repo,
       );
       return {
         workspace: cwd,
-        baseCommit: this.policy.baseCommit,
+        baseCommit: repo.baseCommit,
         diff: diff.slice(0, limit),
         untracked: untracked.slice(0, 8192),
         truncated: diff.length > limit || untracked.length > 8192,
@@ -662,11 +962,14 @@ export class WorkspaceBroker {
       "STATE_BLOCKED",
       "A test is already running for this Agent",
     );
-    const cwd = this.cwd(agent);
+    const cwd = this.cwd(agent, args.repositoryId);
+    const reads = this.assignment(agent.id).repositoryIds.map((id) =>
+      this.cwd(agent, id),
+    );
     const home = join(this.state, "test-homes", agent.id);
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const controller = new AbortController();
-    this.running.set(agent.id, controller);
+    this.running.set(agent.id, { controller, workspace: cwd, reads });
     try {
       return await new Promise<object>((yes, no) => {
         const child = spawn(
@@ -681,6 +984,7 @@ export class WorkspaceBroker {
                 name === "terminal"
                   ? join(this.state, "workspaces")
                   : undefined,
+                reads,
               ),
             ),
           ],

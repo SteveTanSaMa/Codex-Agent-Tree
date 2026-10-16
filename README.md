@@ -6,9 +6,11 @@
 
 **`0.1.0-beta.1`：面向 macOS arm64、Node ≥26.3.1、精确版本 `codex-cli 0.162.0-alpha.17.2`，单凭据域。** 默认仍是文本分析；显式选择 Git 仓库后，Lead 可使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
 
-Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。升级会迁移至 schema 8，请先停止并备份完整 state；已有只读团队不自动获得新权限。
+Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。main 升级会迁移至 schema 9，请先停止并备份完整 state；已有只读团队不自动获得新权限。
 
-main 已加入 Beta 1 审查后的 Task 投影优化、工作树诊断与恢复说明，尚未另发 Release；已发布 Beta 1 ZIP 保持不变。见[审查跟进](docs/review-beta-1.md)。
+main 已加入多仓库与多 worktree 支持，以及 Beta 1 审查后的 Task 投影优化和工作树恢复说明，尚未另发 Release；已发布 Beta 1 ZIP 保持不变。见[多仓库设计与验证](docs/multi-repository-plan.md)和[审查跟进](docs/review-beta-1.md)。
+
+多仓库团队使用 `init --workspace-config /absolute/path/workspaces.json`，登记每个独立 Git 根目录；上层目录无需有 `.git`。每个二级 Agent 可获得一个或多个仓库，在 `state/workspaces/AGENT_ID/仓库目录名` 中分别创建独立 worktree，保留 MiPlay App / DXMT / LSFG 的相邻布局。三级默认只读继承父工作树，也可创建独立只读 worktree。仓库授权只能缩小；Lead 按仓库审核和集成。[配置示例和工具用法](references/coding.md#multiple-repositories)。
 
 ## 安装
 
@@ -113,7 +115,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` 统一返回 Agent、任务摘要、预算、消息计数和阻塞原因。用其 cursor 调用 `wait`，之后用每次响应的顶层 cursor 续读，`hasMore` 表示还有事件页。`noProgress` 需要检查输入、fence、预算或未知执行，并非团队完成；等待不占用托管 Turn。详细动作、权限和输入文件格式见 [操作说明](references/operations.md)。
 
-升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 会将数据库迁移到 schema 8，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
+升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。当前 main 会将数据库迁移到 schema 9，旧版不能直接降级读取。已有团队保持原先的 enforce 策略，新团队才默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
 
 ## 开发与验证
 

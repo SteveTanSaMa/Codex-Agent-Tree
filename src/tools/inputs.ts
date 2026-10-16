@@ -21,8 +21,45 @@ function object(value: unknown, allowed: string[]): Record<string, unknown> {
   return result;
 }
 export function spawnInput(value: unknown) {
-  const o = object(value, ["requestKey", "name", "role", "task", "tokens"]);
+  const o = object(value, [
+    "requestKey",
+    "name",
+    "role",
+    "task",
+    "tokens",
+    "repositoryId",
+    "repositoryIds",
+    "worktree",
+  ]);
+  requireCondition(
+    o.worktree === undefined ||
+      o.worktree === "isolated" ||
+      o.worktree === "inherit",
+    "INVALID_INPUT",
+    "Invalid worktree mode",
+  );
+  requireCondition(
+    o.repositoryIds === undefined ||
+      (Array.isArray(o.repositoryIds) &&
+        o.repositoryIds.length > 0 &&
+        o.repositoryIds.length <= 16),
+    "INVALID_INPUT",
+    "Invalid repository grant",
+  );
   return {
+    ...(o.repositoryId === undefined
+      ? {}
+      : { repositoryId: text(o.repositoryId, "repositoryId", 64) }),
+    ...(o.repositoryIds === undefined
+      ? {}
+      : {
+          repositoryIds: (o.repositoryIds as unknown[]).map((id) =>
+            text(id, "repository ID", 64),
+          ),
+        }),
+    ...(o.worktree === undefined
+      ? {}
+      : { worktree: o.worktree as "isolated" | "inherit" }),
     requestKey: text(o.requestKey, "requestKey", 128),
     name: text(o.name, "name", 96),
     role: text(o.role, "role", 1024),
@@ -156,13 +193,22 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_spawn",
-    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Token allocation is optional in observe mode; enforce mode requires tokens transferred from your own allocation. Structural and lifetime limits always apply. Accepted creation may still be initializing.",
+    "Create an authorized child with its own persistent identity and independent Codex Thread. Reuse requestKey for the same logical request. Token allocation is optional in observe mode; enforce mode requires tokens transferred from your own allocation. Structural and lifetime limits always apply. Accepted creation may still be initializing. Coding: repositoryId selects primary, repositoryIds delegates a subset (default only primary); second-level worktree is isolated, deeper default inherit or explicit isolated. Isolated starts at the registered base, not parent edits.",
     {
       requestKey: string,
       name: string,
       role: string,
       task: string,
       tokens: { type: "integer", minimum: 1 },
+      repositoryId: string,
+      repositoryIds: {
+        type: "array",
+        items: string,
+        minItems: 1,
+        maxItems: 16,
+        uniqueItems: true,
+      },
+      worktree: { type: "string", enum: ["isolated", "inherit"] },
     },
     ["requestKey", "name", "role", "task"],
   ),

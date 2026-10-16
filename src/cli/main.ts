@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import {
   workspacePolicy,
+  multiWorkspacePolicy,
+  repositories,
   assertWorkspaceSeparation,
   type TestCommand,
 } from "../workspace/broker.ts";
@@ -346,27 +348,38 @@ try {
     );
     const repository = flag("workspace");
     const testsFile = flag("test-commands");
+    const manifestFile = flag("workspace-config");
+    requireCondition(
+      !manifestFile || (!repository && !testsFile),
+      "INVALID_INPUT",
+      "--workspace-config cannot be combined with --workspace or --test-commands",
+    );
     requireCondition(
       !testsFile || repository,
       "INVALID_INPUT",
       "--test-commands requires --workspace",
     );
-    const workspace = repository
-      ? workspacePolicy(
-          repository,
-          testsFile
-            ? (JSON.parse(readFileSync(resolve(testsFile), "utf8")) as Record<
-                string,
-                TestCommand
-              >)
-            : {},
+    const workspace = manifestFile
+      ? multiWorkspacePolicy(
+          JSON.parse(readFileSync(resolve(manifestFile), "utf8")),
         )
-      : undefined;
+      : repository
+        ? workspacePolicy(
+            repository,
+            testsFile
+              ? (JSON.parse(readFileSync(resolve(testsFile), "utf8")) as Record<
+                  string,
+                  TestCommand
+                >)
+              : {},
+          )
+        : undefined;
     const runtimeHome = resolve(
       flag("runtime-home", join(homedir(), ".cat", "runtime"))!,
     );
     if (workspace)
-      assertWorkspaceSeparation(workspace.repository, state, runtimeHome);
+      for (const repo of Object.values(repositories(workspace)))
+        assertWorkspaceSeparation(repo.repository, state, runtimeHome);
     mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
     const providerEnv = flag("provider-env");
     const keychainService = flag("keychain-service");
@@ -691,7 +704,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--token-policy observe|enforce] [--max-total-turns 100], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send --target ID --message TEXT [--key KEY], control --target ID --action pause|resume|cancel|terminate, native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

@@ -2,6 +2,8 @@ import {
   WorkspaceBroker,
   assertWorkspaceSeparation,
   workspaceTools,
+  repositories,
+  validateWorkspacePolicy,
   type WorkspacePolicy,
 } from "../workspace/broker.ts";
 import { mkdirSync } from "node:fs";
@@ -142,17 +144,23 @@ export class Coordinator {
       stateDirectory: resolve(readonlyOptions.stateDirectory),
     };
     this.options = options;
+    if (options.workspace) validateWorkspacePolicy(options.workspace);
     if (options.workspace)
-      assertWorkspaceSeparation(
-        options.workspace.repository,
-        options.stateDirectory,
-        options.runtimeHome,
-      );
+      for (const repo of Object.values(repositories(options.workspace)))
+        assertWorkspaceSeparation(
+          repo.repository,
+          options.stateDirectory,
+          options.runtimeHome,
+        );
     this.store = new Store(join(options.stateDirectory, "business.sqlite"));
     try {
+      this.store.configureWorkspace(options.workspace);
       this.workspace = options.workspace
-        ? new WorkspaceBroker(options.stateDirectory, options.workspace, (id) =>
-            this.store.agent(id),
+        ? new WorkspaceBroker(
+            options.stateDirectory,
+            options.workspace,
+            (id) => this.store.agent(id),
+            (id) => this.store.workspaceAssignment(id),
           )
         : undefined;
       this.runtime =
@@ -267,15 +275,12 @@ export class Coordinator {
       [
         ...agentTools,
         ...(this.workspace
-          ? workspaceTools(
-              agent.depth,
-              Object.keys(this.workspace.policy.tests),
-            )
+          ? workspaceTools(agent.depth, this.workspace.tests(agent))
           : []),
       ],
       "Use the supplied Agent Tree tools for all delegation and communication. Caller identity and permissions are host-controlled. Do not invoke native subagents. Use only your supplied tools. Descendants cannot use terminal; Lead may use terminal only in coding mode. For a delegation task, spawn once and end the initial Turn promptly; do not wait for a child result. On a message-triggered Turn, handle the delivered messages, send a report to your parent if appropriate, then agent_ack their IDs before finishing. A non-root leaf must report its result to its parent with agent_send before finishing. Reuse requestKey for the same logical action. Never invent a successful tool response." +
         (this.workspace
-          ? ` Coding workspace: ${cwd}. Level ${agent.depth + 1}. Second-level writes are isolated in a detached worktree based on ${this.workspace.policy.baseCommit}; report changed files and workspace path. Third-level Agents inspect their parent workspace read-only. A test result is not task completion. Lead must review patches before integrating them.`
+          ? ` Coding workspace: ${cwd}. Level ${agent.depth + 1}. Use workspace_list for authorized repositories, fixed base commits and worktree owners. Tools accept repositoryId; omission selects your primary repository. Second-level Agents have isolated worktrees. Third-level Agents are read-only; inherit sees parent edits, isolated sees the registered base. Spawn may delegate a subset via repositoryIds with repositoryId as primary; second-level must be isolated. Report repository IDs, changed files and worktree paths. A test result is not task completion. Lead must review patches before integrating them.`
           : " This is a text-only team; do not run commands."),
     );
     this.store.bind(agent.id, thread, "default");
@@ -635,6 +640,7 @@ export class Coordinator {
       let output: unknown;
       if (
         [
+          "workspace_list",
           "read_file",
           "write_file",
           "search_code",
@@ -654,16 +660,20 @@ export class Coordinator {
           "STATE_BLOCKED",
           "Workspace capability blocked by lifecycle or reconciliation fence",
         );
+        const repositoryId = this.workspace.selection(
+          agent,
+          record(p.arguments).repositoryId,
+        ).id;
         this.store.note(agent.id, "workspace.tool.started", {
+          repositoryId,
           tool,
           nativeCallId: p.callId ?? null,
           turnId,
         });
         requireCondition(
-          workspaceTools(
-            agent.depth,
-            Object.keys(this.workspace.policy.tests),
-          ).some((t) => t.name === tool),
+          workspaceTools(agent.depth, this.workspace.tests(agent)).some(
+            (t) => t.name === tool,
+          ),
           "FORBIDDEN",
           "Workspace tool is not granted at this level",
         );
@@ -681,6 +691,7 @@ export class Coordinator {
         }
         const result = output as Record<string, unknown>;
         this.store.note(agent.id, "workspace.tool.completed", {
+          repositoryId,
           tool,
           ...(tool === "write_file"
             ? {
@@ -798,6 +809,7 @@ export class Coordinator {
       ...agent,
       workspace: this.workspace
         ? {
+            ...this.workspace.describe(agent),
             level: agent.depth + 1,
             terminal: agent.depth === 0,
             write: agent.depth <= 1,

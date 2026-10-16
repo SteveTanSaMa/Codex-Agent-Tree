@@ -6,9 +6,11 @@ An installable Codex Skill for recursive teams of independent, recoverable Codex
 
 **`0.1.0-beta.1`: qualified on macOS arm64, Node ≥26.3.1 and exactly `codex-cli 0.162.0-alpha.17.2`, with one credential domain.** Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved test commands, and deeper members read-only review tools. Your current conversation is the operator; the managed Root is a separate session.
 
-This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 8. Existing read-only teams do not gain permissions automatically.
+This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 9 on current main. Existing read-only teams do not gain permissions automatically.
 
-Current main adds post-Beta-1 task projection improvements and worktree diagnostics/recovery guidance. These are unreleased; the published Beta 1 ZIP remains unchanged. See the [review follow-up](docs/review-beta-1.md).
+Current main adds multiple repositories and worktrees, alongside post-Beta-1 task projection improvements and worktree recovery guidance. These are unreleased; the published Beta 1 ZIP remains unchanged. See the [multi-repository design and validation](docs/multi-repository-plan.md) and [review follow-up](docs/review-beta-1.md).
+
+Use `init --workspace-config /absolute/path/workspaces.json` to register independent Git roots; their parent directory does not need Git. A secondary may receive one or more repositories, each in `state/workspaces/AGENT_ID/REPOSITORY_DIRECTORY`, preserving sibling layouts such as MiPlay App / DXMT / LSFG. Deeper Agents inherit their parent's worktrees read-only by default or create isolated read-only worktrees. Repository grants only narrow; Lead reviews and integrates each repository separately. See [configuration and tool examples](references/coding.md#multiple-repositories).
 
 ## Install
 
@@ -114,7 +116,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` combines agent summaries, tasks, budgets, message counts and blocking reasons. Pass its cursor to `wait`, then continue with each response's top-level cursor. `hasMore` indicates another event page. `noProgress` calls for inspecting missing input, fences, budgets or unknown work; it does not prove completion. Operator waiting does not occupy a managed Turn. See [operations](references/operations.md) for permissions, dependency edits, input files and cursor details.
 
-Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Beta migrates the database to schema 8; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
+Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Current main migrates the database to schema 9; older versions cannot directly read it. Existing trees retain their previous enforce policy; only new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
 
 ## Development and validation
 

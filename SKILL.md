@@ -7,7 +7,7 @@ description: Run durable, recursive Codex analysis and coding teams with indepen
 
 Use the bundled CLI to operate a persistent local team. Each managed Agent has its own Codex Thread; children can create children and messages wake idle recipients. The caller's current conversation remains the operator; it does not become the managed Root.
 
-Qualified platform: **macOS arm64, Node >=26.3.1, and exactly `codex-cli 0.162.0-alpha.17.2`**. Teams default to text-only analysis. For a user-requested coding team, explicitly select a clean committed repository with `init --workspace PATH`, optionally `--test-commands JSON`; first read [coding operations](references/coding.md). Lead receives an audited terminal, second-level members write isolated Git worktrees through restricted tools, and third-level members review read-only. Native shell and native subagents remain disabled. Do not retrofit permissions into an existing team's configuration.
+Qualified platform: **macOS arm64, Node >=26.3.1, and exactly `codex-cli 0.162.0-alpha.17.2`**. Teams default to text-only analysis. For a user-requested coding team, explicitly select clean committed repositories with `init --workspace PATH` (optional `--test-commands JSON`) or an operator-authored `--workspace-config JSON` manifest; first read [coding operations](references/coding.md). Lead receives an audited terminal, second-level members write isolated Git worktrees through restricted tools, and third-level members review read-only in inherited or explicitly isolated worktrees. Native shell and native subagents remain disabled. Do not retrofit permissions into an existing team's configuration.
 
 ## Locate and prepare
 
@@ -31,6 +31,8 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 Use the coding workflow only for repository work authorized by the user. Keep state and runtime home outside the repository. Second-level worktrees start from the initialization commit; dependencies and ignored files are not copied. File writes can create missing parent directories within the workspace. Descendants cannot obtain terminal through a task or a prompt. Test commands are operator-authored fixed executable/argv entries, not model-supplied shell strings. Commands are sandboxed, network-disabled and bounded to 30 seconds; inspect failures instead of weakening permissions.
 
 Require coders to report actual diffs, worktree paths and test receipts. Lead reviews and integrates changes using `terminal`, then verifies in its own checkout. Third-level review is static unless the operator performs the test. On an uncertain command receipt, inspect its existing outcome; do not switch call IDs to bypass recovery. Retain worktrees until changes have been reviewed. See [coding operations](references/coding.md) for capabilities and limitations.
+
+For multiple repositories, read the manifest and delegation examples in [coding operations](references/coding.md#multiple-repositories). Register each independent Git root, including sibling repositories below a non-Git parent. Delegate only the needed `repositoryIds`, select a primary `repositoryId`, and keep all paths and test commands operator-controlled. A secondary gets an isolated worktree per granted repository; deeper members inherit by default or request `worktree: "isolated"` while remaining read-only. Use `workspace_list` to inspect mappings. Independent worktrees start at pinned base commits and do not copy parent patches. Lead reviews and integrates each repository separately.
 
 ## Delegate and retrieve
 
