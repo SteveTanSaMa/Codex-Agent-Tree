@@ -421,6 +421,10 @@ export class Coordinator {
             this.store.note(agent.id, "scheduler.error", {
               code:
                 error instanceof AgentTreeError ? error.code : "RUNTIME_ERROR",
+              message:
+                error instanceof AgentTreeError
+                  ? error.message
+                  : "Runtime operation failed; inspect correlated state",
             });
           }
         }

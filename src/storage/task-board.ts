@@ -59,6 +59,18 @@ export class TaskBoard {
         "SELECT s.* FROM task_scopes s JOIN tasks t ON t.id=s.task_id WHERE t.tree_id=? ORDER BY s.scope",
       )
       .all(treeId) as Row[];
+    const grouped = (values: Row[], field: string) => {
+      const result = new Map<string, string[]>();
+      for (const row of values) {
+        const id = String(row.task_id);
+        const group = result.get(id) ?? [];
+        group.push(String(row[field]));
+        result.set(id, group);
+      }
+      return result;
+    };
+    const dependencies = grouped(deps, "depends_on");
+    const writeScopes = grouped(scopes, "scope");
     const tasks = rows.map((r): Task => ({
       id: String(r.id),
       treeId: String(r.tree_id),
@@ -71,36 +83,52 @@ export class TaskBoard {
       result: r.result === null ? null : String(r.result),
       createdAt: String(r.created_at),
       updatedAt: String(r.updated_at),
-      blockedBy: deps
-        .filter((d) => d.task_id === r.id)
-        .map((d) => String(d.depends_on)),
-      writeScopes: scopes
-        .filter((s) => s.task_id === r.id)
-        .map((s) => String(s.scope)),
+      blockedBy: dependencies.get(String(r.id)) ?? [],
+      writeScopes: writeScopes.get(String(r.id)) ?? [],
       ready: false,
       writeScopeWarnings: [],
     }));
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    const positions = new Map(tasks.map((task, index) => [task.id, index]));
+    // Prefixes are path components, so src/a conflicts with src/a/x but not src/ab.
+    const exact = new Map<string, Set<string>>();
+    const descendants = new Map<string, Set<string>>();
+    const add = (index: Map<string, Set<string>>, path: string, id: string) => {
+      const owners = index.get(path) ?? new Set<string>();
+      owners.add(id);
+      index.set(path, owners);
+    };
+    const prefixes = (scope: string) => {
+      const result: string[] = [];
+      let prefix = "";
+      for (const part of scope.split("/")) {
+        prefix = prefix ? prefix + "/" + part : part;
+        result.push(prefix);
+      }
+      return result;
+    };
+    for (const task of tasks)
+      if (task.status === "in_progress") {
+        for (const scope of task.writeScopes) {
+          add(exact, scope, task.id);
+          for (const prefix of prefixes(scope))
+            add(descendants, prefix, task.id);
+        }
+      }
     for (const t of tasks) {
       t.ready =
         t.status === "pending" &&
-        t.blockedBy.every(
-          (id) => tasks.find((dep) => dep.id === id)?.status === "completed",
-        );
-      t.writeScopeWarnings = tasks
-        .filter(
-          (other) =>
-            other.id !== t.id &&
-            other.status === "in_progress" &&
-            t.writeScopes.some((left) =>
-              other.writeScopes.some(
-                (right) =>
-                  left === right ||
-                  left.startsWith(right + "/") ||
-                  right.startsWith(left + "/"),
-              ),
-            ),
-        )
-        .map((other) => `Write scopes overlap with ${other.id}; advisory only`);
+        t.blockedBy.every((id) => byId.get(id)?.status === "completed");
+      const conflicts = new Set<string>();
+      for (const scope of t.writeScopes) {
+        for (const prefix of prefixes(scope))
+          for (const id of exact.get(prefix) ?? []) conflicts.add(id);
+        for (const id of descendants.get(scope) ?? []) conflicts.add(id);
+      }
+      conflicts.delete(t.id);
+      t.writeScopeWarnings = [...conflicts]
+        .sort((a, b) => positions.get(a)! - positions.get(b)!)
+        .map((id) => `Write scopes overlap with ${id}; advisory only`);
     }
     return tasks;
   }

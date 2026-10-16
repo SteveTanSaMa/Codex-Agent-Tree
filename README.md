@@ -8,6 +8,8 @@
 
 Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离、多凭据域或自动合并。详见[编码工具与边界](references/coding.md)、[Beta 验收](docs/beta-validation.md)与[用量核算](docs/usage-reconciliation.md)。升级会迁移至 schema 8，请先停止并备份完整 state；已有只读团队不自动获得新权限。
 
+main 已加入 Beta 1 审查后的 Task 投影优化、工作树诊断与恢复说明，尚未另发 Release；已发布 Beta 1 ZIP 保持不变。见[审查跟进](docs/review-beta-1.md)。
+
 ## 安装
 
 克隆到 Skill 目录；目标目录应不存在：

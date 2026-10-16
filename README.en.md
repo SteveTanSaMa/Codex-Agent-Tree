@@ -8,6 +8,8 @@ An installable Codex Skill for recursive teams of independent, recoverable Codex
 
 This Beta targets trusted local repositories in the qualified environment. It does not claim production-grade isolation, multiple credential domains or automatic merges. See [coding operations](references/coding.md), [Beta qualification](docs/beta-validation.md) and [usage reconciliation](docs/usage-reconciliation.md). Back up stopped state before migration to schema 8. Existing read-only teams do not gain permissions automatically.
 
+Current main adds post-Beta-1 task projection improvements and worktree diagnostics/recovery guidance. These are unreleased; the published Beta 1 ZIP remains unchanged. See the [review follow-up](docs/review-beta-1.md).
+
 ## Install
 
 Clone into your skills directory; the destination must not already exist:

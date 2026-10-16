@@ -670,3 +670,134 @@ test("incomplete worktree provisioning after a crash refuses reuse or automatic 
     f.close();
   }
 });
+test("scheduler exposes an incomplete worktree reason without starting or resetting the child", async () => {
+  const f = fixture();
+  const runtime = new ControlledRuntime(),
+    state = join(f.dir, "diagnostic-state");
+  const c = new Coordinator(
+    {
+      stateDirectory: state,
+      runtimeHome: join(f.dir, "diagnostic-home"),
+      expectedVersion: "fixture",
+      workspace: f.policy,
+    },
+    runtime,
+  );
+  const gate = async (p: () => boolean) => {
+    for (let i = 0; i < 500 && !p(); i++)
+      await new Promise<void>((r) => setImmediate(r));
+    assert.ok(p());
+  };
+  try {
+    await c.start();
+    const root = c.createRoot("Lead", "code", {
+      tokenPolicy: "observe",
+      tokens: 1000,
+      maxDepth: 1,
+      maxAgents: 2,
+      maxConcurrentTurns: 2,
+      maxTurnsPerAgent: 2,
+      turnReservation: 100,
+    });
+    await gate(
+      () => runtime.starts.length === 1 && !!c.store.attempts()[0]?.turn_id,
+    );
+    const turn = runtime.starts[0]!;
+    const actor = c.store.authenticate(turn.threadId, turn.turnId, 1),
+      child = c.store.spawn(actor, "child", {
+        name: "Coder",
+        role: "coder",
+        task: "code",
+      });
+    const path = join(state, "workspaces", child.id);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "keep.txt"), "preserve");
+    c.submitInput(root.id, "tick", "input");
+    await gate(() =>
+      c.store.events(child.id).some((e) => e.kind === "scheduler.error"),
+    );
+    const e = c.store
+      .events(child.id)
+      .find((e) => e.kind === "scheduler.error")!;
+    assert.match(
+      JSON.parse(String(e.body)).message,
+      /provisioning is incomplete/,
+    );
+    assert.equal(c.store.binding(child.id), undefined);
+    assert.equal(runtime.starts.length, 1);
+    assert.equal(readFileSync(join(path, "keep.txt"), "utf8"), "preserve");
+  } finally {
+    await c.stop();
+    f.close();
+  }
+});
+test("command effect is cached for the same native call ID; a new call ID intentionally runs new work", async () => {
+  const f = fixture(),
+    runtime = new ControlledRuntime();
+  const c = new Coordinator(
+    {
+      stateDirectory: join(f.dir, "receipt-state"),
+      runtimeHome: join(f.dir, "receipt-home"),
+      expectedVersion: "fixture",
+      workspace: f.policy,
+    },
+    runtime,
+  );
+  const wait = async (p: () => boolean) => {
+    const end = Date.now() + 5000;
+    while (!p() && Date.now() < end)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(p());
+  };
+  try {
+    await c.start();
+    c.createRoot("Lead", "fixture", {
+      tokenPolicy: "observe",
+      tokens: 1000,
+      maxDepth: 0,
+      maxAgents: 1,
+      maxConcurrentTurns: 1,
+      maxTurnsPerAgent: 2,
+      turnReservation: 100,
+    });
+    await wait(
+      () => runtime.starts.length === 1 && !!c.store.attempts()[0]?.turn_id,
+    );
+    const t = runtime.starts[0]!;
+    const command = `'${process.execPath}' -e 'require("node:fs").appendFileSync("counter.txt","x")'`;
+    for (const [index, callId] of [
+      "same-call",
+      "same-call",
+      "new-call",
+    ].entries()) {
+      runtime.onRequest({
+        id: index + 1,
+        method: "item/tool/call",
+        connectionGeneration: 1,
+        params: {
+          threadId: t.threadId,
+          turnId: t.turnId,
+          callId,
+          tool: "terminal",
+          arguments: { command },
+        },
+      });
+      await wait(() => runtime.responses.length === index + 1);
+      assert.equal(
+        (runtime.responses[index] as { success: boolean }).success,
+        true,
+      );
+      assert.equal(
+        readFileSync(join(f.repo, "counter.txt"), "utf8"),
+        index < 2 ? "x" : "xx",
+      );
+    }
+    assert.equal(
+      c.store.workspaceCommandSummary(c.store.agents()[0]!.id)?.total,
+      2,
+    );
+  } finally {
+    await c.stop();
+    f.close();
+  }
+});
