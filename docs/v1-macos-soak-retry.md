@@ -33,3 +33,11 @@ The harness now checks quiescence in one SQLite snapshot and requires exact roun
 The smoke also exposed a disk-sampling race against removal of CLI temporary plugin files. Sampling skips only ENOENT, never follows symlinks, and still fails on permission or I/O errors. Deterministic tests cover deletion and error propagation; the failed smoke evidence is retained.
 
 Regression validation: 171 passed and 17 conditional skips; type and formatting checks passed. Smoke `smoke-20261019-015327` passed analysis with 58 rounds, 1,922 local synthetic requests, all three recovery checkpoints and native history reconciliation; watchdog exited zero without forced cleanup. Fresh nine-hour run `nine-hour-20261019-015904` started at 01:59 Asia/Shanghai, expected to finish at 10:59, with cleanup deadline around 11:14. Its four frozen harness hashes match the passing smoke. Final long-run outcome remains pending. Monitoring is active every 15 minutes; no new starts are authorized after 09:00.
+
+## 第二轮提前停止 / Second early stop
+
+`nine-hour-20261019-015904` 于北京时间 04:07:22 停止，运行 2 小时 8 分 17 秒、进入第 129 轮、3,640 次本地请求。两小时强杀恢复通过，但未到五/八小时和最终历史对账。watchdog exit=1、forcedDeadline=false，清理结束于 04:07:23。analysis=review-required，不是九小时通过。
+
+只读数据库确认编码树恰有 256 个任务。现有 Runtime 限制最多 256 个未删除任务；测试器每次整合创建新任务且从不删除，达到上限后创建被拒绝，随后查询新任务的断言失败。修复仅在每轮因果屏障和精确文件检查通过后，经 CLI 的 CAS task-update delete 清理 completed 任务，并确认删除已持久化；保留数据库历史与事件，不修改上限，不清理未完成任务。屏障允许历史 deleted 任务，不改变消息及 Attempt 完成要求。回归覆盖 300 次 create→claim→complete→delete 生命周期，超过原失败阈值。
+
+The second full run stopped after 2h 8m 17s with 3,640 local requests while entering round 129. Its two-hour recovery passed; five/eight-hour checkpoints and final history reconciliation were not reached. Watchdog cleanup finished normally with runner exit 1; analysis requires review. The coding tree had exactly 256 tasks: the harness never deleted completed tasks and hit the existing live-task cap. After successful causal and exact file checks, the corrected harness archives only completed tasks using the normal CAS CLI delete action and verifies persistence. The cap and Runtime remain unchanged, with all audit history retained. A 300-lifecycle regression crosses the original failure threshold. A fresh matching smoke is required before another independent full run.

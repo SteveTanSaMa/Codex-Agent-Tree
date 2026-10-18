@@ -451,3 +451,31 @@ test("schema 4 upgrades to task storage without changing existing native identit
     f.close();
   }
 });
+
+test("soak task archival sustains more than 256 complete lifecycles without raising the live-task cap", () => {
+  const f = fixture();
+  try {
+    for (let i = 0; i < 300; i++) {
+      let task = f.store.tasks.create(f.a, f.root.id, input(`soak-${i}`));
+      for (const action of ["claim", "complete", "delete"]) {
+        task = f.store.tasks.update(f.a, f.root.id, {
+          taskId: task.id,
+          requestKey: `soak-${i}-${action}`,
+          expectedRevision: task.revision,
+          action,
+          ...(action === "complete" ? { result: "verified" } : {}),
+        });
+        assert.equal(
+          task.status,
+          action === "claim"
+            ? "in_progress"
+            : action === "complete"
+              ? "completed"
+              : "deleted",
+        );
+      }
+    }
+  } finally {
+    f.close();
+  }
+});

@@ -32,7 +32,7 @@ export function roundReady(db, round, leadId, workers) {
       WHERE o.status='processed' AND t.state='completed' AND (${inputs}))=3
     AND (SELECT COUNT(*) FROM messages m JOIN turn_attempts t ON t.id=m.attempt_id
       WHERE m.recipient_id=? AND m.status='processed' AND t.state='completed' AND (${reports}))=3
-    AND NOT EXISTS(SELECT 1 FROM tasks WHERE status!='completed') AS ready`,
+    AND NOT EXISTS(SELECT 1 FROM tasks WHERE status NOT IN ('completed','deleted')) AS ready`,
       )
       .get(...inputParams, leadId, ...reportParams).ready === 1
   );

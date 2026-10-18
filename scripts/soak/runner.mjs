@@ -728,10 +728,40 @@ async function codingLoop() {
       "Lead failed to integrate coderB",
     );
     assert.equal(
-      rows("coding", "SELECT id FROM tasks WHERE status!='completed'").length,
+      rows(
+        "coding",
+        "SELECT id FROM tasks WHERE status NOT IN ('completed','deleted')",
+      ).length,
       0,
       "unfinished synthetic tasks",
     );
+    // Exercise the normal task API without exhausting the 256 live-task cap.
+    // Only archive tasks after this round's causal and file checks succeeded.
+    for (const task of rows(
+      "coding",
+      "SELECT id,revision FROM tasks WHERE status='completed'",
+    )) {
+      await call(
+        "coding",
+        "task-update",
+        "--target",
+        identities.lead,
+        "--task-id",
+        task.id,
+        "--key",
+        "soak-archive-" + task.id,
+        "--revision",
+        String(task.revision),
+        "--action",
+        "delete",
+      );
+      assert.equal(
+        rows("coding", "SELECT status FROM tasks WHERE id=?", task.id)[0]
+          ?.status,
+        "deleted",
+        "completed task archival did not commit",
+      );
+    }
     if (n % 5 === 0) {
       const begin = performance.now();
       const view = await call("coding", "view", "--target", identities.lead);

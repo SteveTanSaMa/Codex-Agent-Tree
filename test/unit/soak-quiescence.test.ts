@@ -106,6 +106,8 @@ test("round barrier requires every exact input/report and its completed integrat
     );
     db.exec("UPDATE tasks SET status='completed'");
     assert.equal(roundReady(db, 77, "lead", workers), true);
+    db.exec("UPDATE tasks SET status='deleted'");
+    assert.equal(roundReady(db, 77, "lead", workers), true);
     db.exec("UPDATE messages SET status='unknown' WHERE sender_id='worker-2'");
     assert.equal(roundReady(db, 77, "lead", workers), false);
   } finally {
