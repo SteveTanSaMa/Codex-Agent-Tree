@@ -1,3 +1,5 @@
+> 后续 Beta 3 已修复本文基线中的新任务波次等待，并补验实际安装包升级。本文保留原提交的测试事实；最新结果见 [Beta 3 验收](beta-3-validation.md)。
+
 # Compatibility, recovery and integration results / 跨环境、恢复与整合补验
 
 日期：2026-10-18。计划：[本轮计划与验收](compatibility-recovery-round.md)。代码基线：`eb6cc9b`（能力准入始于 `63e0b56`）。本轮不发布新 tag，也不修改已发布的 Beta 2 安装包。
