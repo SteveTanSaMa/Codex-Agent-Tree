@@ -1,5 +1,5 @@
 import { treeBytes } from "./fs-metrics.mjs";
-import { laneIdle, roundReady } from "./quiescence.mjs";
+import { laneIdle, roundReady, workersCompleted } from "./quiescence.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
@@ -687,7 +687,23 @@ async function codingLoop() {
   while (active()) {
     const begin = Date.now(),
       n = ++sequence;
-    for (const role of ["coderA", "coderB", "reviewer"])
+    for (const role of ["coderA", "coderB", "reviewer"]) {
+      if (role === "reviewer")
+        await until(
+          () =>
+            dbRead("coding", (db) =>
+              workersCompleted(
+                db,
+                n,
+                ["coderA", "coderB"].map((role) => ({
+                  role,
+                  id: identities[role],
+                })),
+              ),
+            ),
+          "coder completion before shared-workspace review timed out",
+          60000,
+        );
       await call(
         "coding",
         "send",
@@ -700,6 +716,7 @@ async function codingLoop() {
         "--message",
         `CATSOAK_${role}_${n}_normal`,
       );
+    }
     await until(
       () =>
         dbRead("coding", (db) =>

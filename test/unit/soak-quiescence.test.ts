@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-const { laneIdle, roundReady } = await import(
+const { laneIdle, roundReady, workersCompleted } = await import(
   new URL("../../scripts/soak/quiescence.mjs", import.meta.url).href
 );
 function fixture() {
@@ -110,6 +110,27 @@ test("round barrier requires every exact input/report and its completed integrat
     assert.equal(roundReady(db, 77, "lead", workers), true);
     db.exec("UPDATE messages SET status='unknown' WHERE sender_id='worker-2'");
     assert.equal(roundReady(db, 77, "lead", workers), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("inherited-workspace reviewer waits for both coder Attempts to complete", () => {
+  const db = fixture();
+  const workers = [
+    { id: "a", role: "coderA" },
+    { id: "b", role: "coderB" },
+  ];
+  try {
+    db.exec(
+      "INSERT INTO turn_attempts VALUES('a','running'),('b','completed'); INSERT INTO operator_messages VALUES('a','round-173-coderA','acknowledged','a'),('b','round-173-coderB','processed','b')",
+    );
+    assert.equal(workersCompleted(db, 173, workers), false);
+    db.exec("UPDATE turn_attempts SET state='completed'");
+    assert.equal(workersCompleted(db, 173, workers), false);
+    db.exec("UPDATE operator_messages SET status='processed'");
+    assert.equal(workersCompleted(db, 173, workers), true);
+    assert.equal(workersCompleted(db, 174, workers), false);
   } finally {
     db.close();
   }

@@ -37,3 +37,17 @@ export function roundReady(db, round, leadId, workers) {
       .get(...inputParams, leadId, ...reportParams).ready === 1
   );
 }
+
+// A reviewer inheriting a coder workspace must wait for its command to finish.
+export function workersCompleted(db, round, workers) {
+  return workers.every(
+    (w) =>
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM operator_messages o
+    JOIN turn_attempts t ON t.id=o.attempt_id WHERE o.recipient_id=? AND o.input_key=?
+    AND o.status='processed' AND t.state='completed'`,
+        )
+        .get(w.id, `round-${round}-${w.role}`).n === 1,
+  );
+}
