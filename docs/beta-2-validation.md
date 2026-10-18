@@ -53,3 +53,8 @@ The earlier [upgrade validation](upgrade-validation.md) records the stopped-stat
 - 固定基线子工作树不含 Lead 未提交的测试入口，应提供自包含注册测试或在基线中准备入口；Lead 仍复验集成结果。没有扩大低层 terminal 权限。
 - 缺证据的未知用量/消费不等于零消耗或允许重放。本轮保留一条 Agent 消费 unknown 和旧中断探针未知用量，没有新增执行 unknown。
 - 发布检查不安排新的长时间或付费模型测试；不据本轮宣称多 Agent 质量/成本优势、告警阈值校准、任意提供商兼容或所有恢复竞态已验证。
+## Subsequent gap qualification / 后续补验
+
+2026-10-18: the [follow-up qualification](beta-2-gap-test-results.md) adds independent synthetic real-provider workflows, subtree-control crash windows and native steering/authentication negatives. Its current results are separate from the release-time counts above; published Beta 2 assets remain unchanged.
+
+同日[后续补验](beta-2-gap-test-results.md)已完成独立合成真实任务、子树控制崩溃窗口和原生引导/认证负向检查；当前结果与上述发布时计数分开，已发布安装包保持不变。
