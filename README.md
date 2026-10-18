@@ -34,7 +34,7 @@ $skill-installer 从 SteveTanSaMa/Codex-Agent-Tree 安装根目录 Skill，path 
 
 下一轮对话使用 `$codex-agent-tree`。Skill 采用 `SKILL.md` 与辅助脚本的官方目录形式，见 [OpenAI Skills 文档](https://learn.chatgpt.com/docs/build-skills)。仓库根目录即完整 Skill，不需要另外安装 MCP Server。
 
-首次使用前准备 Node 和上述精确版本的 Codex CLI，并完成文件型登录（`codex login`）。本项目不会自动替换你的 Codex。检查与安装运行依赖：
+首次使用前准备 Node 和通过能力准入的 Codex CLI，并完成文件型登录（`codex login`）。本项目不会自动替换你的 Codex。检查与安装运行依赖：
 
 ```sh
 SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/codex-agent-tree"
@@ -129,7 +129,7 @@ npm run typecheck
 npm run format:check
 npm test
 npm run test:fault
-npm run test:native   # 官方隔离 daemon，不调用模型；需要精确 CLI 和登录
+npm run test:native   # 真实 CLI、隔离 daemon 与本地脚本提供商；不调用付费模型，需兼容 CLI 和测试登录配置
 npm run test:real     # 调用真实模型，消耗账号用量
 npm run package:skill
 ```
@@ -153,3 +153,5 @@ Beta 2 支持在新团队 manifest 中显式登记外部只读资源，供受限
 ## Token 用量提醒
 
 新团队取消对话 token 配额；默认全树达到 5000000 总 token 提醒一次。`token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]` 可配置单次或增量提醒，`--disable` 关闭。提醒不暂停、不新增 Turn、不请求模型；用量缺失时显示未观测。详见[用量提醒与迁移说明](docs/token-reminders.md)。
+
+当前 main 的能力准入、跨环境与恢复补验见[本轮结果](docs/compatibility-recovery-results.md)。已发布 Beta 2 的固定 CLI 说明仅适用于该 tag；main 不再使用精确 CLI 版本锁。

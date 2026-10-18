@@ -109,7 +109,7 @@ An accepted Turn with a lost reply is adopted only from its known Turn ID or uni
 
 ## Current scope
 
-Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login or an explicitly selected provider secret), fixed Codex alpha. No managed shell/file inspection, parallel repository writes, worktrees, merge automation, automatic DAG execution, multi-machine scheduler, or GUI. Budget controls cannot promise exact provider billing; recovery cannot promise exactly-once external effects. The operator CLI is trusted local control, not an isolation boundary against arbitrary code run as that OS user.
+The coding runtime targets macOS arm64, Node ≥26.3.1 and one credential domain (file-backed login or an explicitly selected provider secret). CLI admission checks required protocol capabilities, without a release-number or contract-hash allowlist. Lead terminal, scoped file tools and isolated multi-repository worktrees are supported; merging remains an explicit Lead action. Full Linux/Windows coding isolation, multi-machine scheduling and a GUI are not qualified. Budget controls cannot promise exact provider billing; recovery cannot promise exactly-once external effects. The operator CLI is trusted local control, not an isolation boundary against arbitrary code run as that OS user.
 
 ## Usage evidence reconciliation
 
@@ -119,7 +119,7 @@ Stop and back up the complete state before upgrading. Beta 2 and older source re
 
 ## Third-party provider configuration
 
-Use a dedicated runtime home and explicitly select a trusted provider config and credential source. The config must declare the matching provider `env_key` and Responses API; do not change the pinned Codex version. Configured model names do not independently prove a provider's underlying routing.
+Use a dedicated runtime home and explicitly select a trusted provider config and credential source. The config must declare the matching provider `env_key` and Responses API; use capability admission and reconcile active native work before changing the running daemon binary. Configured model names do not independently prove a provider's underlying routing.
 
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" init --state "$STATE" --runtime-home "$RUNTIME" \

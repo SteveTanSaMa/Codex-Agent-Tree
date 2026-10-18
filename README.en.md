@@ -130,7 +130,7 @@ npm run typecheck
 npm run format:check
 npm test
 npm run test:fault
-npm run test:native   # isolated official daemon; no model calls; exact CLI and login required
+npm run test:native   # real CLI, isolated daemon and local scripted providers; no paid model; compatible CLI and test login configuration required
 npm run test:real     # real model calls; consumes account usage
 npm run package:skill
 ```
@@ -156,3 +156,5 @@ Defaults warn after 15 minutes of autonomous execution, 10 minutes without selec
 ## Token usage reminders
 
 New teams have no per-dialogue token allocation. Default: one tree-wide reminder at 5000000 total tokens. Configure with `token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]`; disable with `--disable`. Alerts never pause, start Turns or request a model. Missing metrics remain unknown. See [reminders and migration](docs/token-reminders.md).
+
+For main capability admission, layered OS coverage and recovery evidence, see [qualification results](docs/compatibility-recovery-results.md). The published Beta 2 CLI pin applies to that tag; main no longer pins an exact CLI release.

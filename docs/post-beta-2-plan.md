@@ -1,3 +1,5 @@
+> 后续更新：本文中的固定 CLI 策略是历史基线，已由[跨环境、恢复与整合测试](compatibility-recovery-round.md)的能力准入策略替代；当前实现不再按版本号或哈希允许列表锁定 CLI。
+
 # Post-Beta-2 plan and acceptance goals / Beta 2 后续计划与验收目标
 
 日期：2026-10-18。状态：**已开始实施，尚未完成全部阶段**。发布基线为 `v0.1.0-beta.2`（`2c9a29f`，schema 12）；开发中的 schema 13 和阶段性验证见[执行记录](post-beta-2-progress.md)。[补验成果](beta-2-gap-test-results.md)单独收录，不改变已发布安装包。本页的目标数值是验收条件，不是所有目标均已实现或兼容性均已通过的声明。

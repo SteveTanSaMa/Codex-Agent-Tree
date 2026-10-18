@@ -1,6 +1,6 @@
 # Compatibility, recovery and integration round / 兼容、恢复与整合轮次
 
-基线：`baa8626`，schema 13。状态：正在执行；最终结果单独记录。本轮以**取消精确 Codex CLI 版本锁**为必要交付，不以扩大一个版本白名单代替。
+基线：`baa8626`，schema 13。状态：已执行，见[结果与剩余限制](compatibility-recovery-results.md)。本轮以**取消精确 Codex CLI 版本锁**为必要交付，不以扩大一个版本白名单代替。
 
 ## 交付顺序与验收
 
