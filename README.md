@@ -14,6 +14,8 @@ Beta 3 新增子树 `scope-replace` 与未知命令收据的 `command-review`，
 
 多仓库团队使用 `init --workspace-config /absolute/path/workspaces.json`，登记每个独立 Git 根目录；上层目录无需有 `.git`。每个二级 Agent 可获得一个或多个仓库，在 `state/workspaces/AGENT_ID/仓库目录名` 中分别创建独立 worktree，保留 MiPlay App / DXMT / LSFG 的相邻布局。三级默认只读继承父工作树，也可创建独立只读 worktree。仓库授权只能缩小；Lead 按仓库审核和集成。[配置示例和工具用法](references/coding.md#multiple-repositories)。
 
+首个正式版计划为 **v1.0.0，仅承诺 macOS**；现有真实长任务证据继续保留，新增九小时持续负载补验见[正式版测试计划](docs/v1-macos-soak-plan.md)。Linux/Windows 完整编码支持另行推进。
+
 ## 安装
 
 克隆到 Skill 目录；目标目录应不存在：

@@ -14,6 +14,8 @@ Beta 3 adds subtree `scope-replace` and `command-review` for unknown command rec
 
 Use `init --workspace-config /absolute/path/workspaces.json` to register independent Git roots; their parent directory does not need Git. A secondary may receive one or more repositories, each in `state/workspaces/AGENT_ID/REPOSITORY_DIRECTORY`, preserving sibling layouts such as MiPlay App / DXMT / LSFG. Deeper Agents inherit their parent's worktrees read-only by default or create isolated read-only worktrees. Repository grants only narrow; Lead reviews and integrates each repository separately. See [configuration and tool examples](references/coding.md#multiple-repositories).
 
+The first stable release is planned as **v1.0.0, initially supporting macOS only**. Existing real workload evidence is retained; see the [nine-hour soak qualification plan](docs/v1-macos-soak-plan.md). Full Linux/Windows coding support will follow separately.
+
 ## Install
 
 Clone into your skills directory; the destination must not already exist:
