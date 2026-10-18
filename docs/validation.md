@@ -1,4 +1,8 @@
-# 最新：Beta 1 验收
+# 最新：Beta 2 验收
+
+本次发布的验证范围和结果见 [Beta 2 验收](beta-2-validation.md)；下方保留历史记录。
+
+# 历史：Beta 1 验收
 
 Beta 新增的编码、沙箱、命令收据、FIFO、用量回执和实际模型流程见 [Beta 验收记录](beta-validation.md)。以下保留 Alpha 各轮验证的历史事实，不代表 Beta 当前范围。
 

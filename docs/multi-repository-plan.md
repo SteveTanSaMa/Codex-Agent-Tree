@@ -32,7 +32,7 @@ Repository 是操作者登记的独立 Git 仓库，Agent 是持久业务身份�
 
 三个独立仓库、同仓库多个二级 worktree、三级 inherit/isolated、跨仓库授权拒绝、相邻依赖测试、非主仓库锁、重启映射/原生 cwd、幂等冲突、旧单仓库迁移和权限边界均需回归。真实 MiPlay 仓库仅作为路径配置示例，不用修改实际项目来验证功能。
 
-## 已实现与验证（2026-10-16，main 未发布）
+## 已实现与验证（2026-10-16 历史快照；现随 Beta 2 发布）
 
 入口为 `init --workspace-config JSON`；完整 MiPlay 示例和委派参数见 [coding operations](../references/coding.md#multiple-repositories)。schema 9 保存固定 registry 与 Agent 授权/模式。文件、搜索、diff、测试和 Lead terminal 接受 repositoryId，workspace_list/status 提供可查询映射；工作树按需创建，命令执行前准备已授权依赖目录。
 
@@ -50,3 +50,5 @@ Repository 是操作者登记的独立 Git 仓库，Agent 是持久业务身份�
 故障测试中的命令父进程死亡 fixture 原来使用假 baseCommit 和普通目录；本轮改为真实提交的 Git 仓库，以符合新增根目录/提交身份验证，随后实际 SIGKILL 验证通过。
 
 以上是测试执行结果，不能视为真实 MiPlay 构建、复杂多仓库任务效率或跨仓库原子提交的证明。未修改真实 MiPlay 仓库，未运行新的付费模型任务。暂不新发 Release，既有 v0.1.0-beta.1 标签、安装包和说明保持不变；新增能力由 main 提供，下一次发布前再进行真实多仓库编码验收。
+
+2026-10-18 发布更新：本功能纳入 `v0.1.0-beta.2`。上述计数与“未发布”描述为 10 月 16 日历史快照；本次实际发布验证见 [Beta 2 验收](beta-2-validation.md)。未据此宣称完成真实 MiPlay 或复杂多仓库构建验收。
