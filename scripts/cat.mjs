@@ -92,6 +92,8 @@ try {
       "check-in",
       "guidance-resolve",
       "control",
+      "scope-replace",
+      "command-review",
       "native-history",
       "release-quarantine",
       "settle-usage",
@@ -100,8 +102,14 @@ try {
     if (!commands.has(command)) throw new Error(`Unknown command: ${command}`);
     const taskFile = args.indexOf("--task-file");
     if (taskFile >= 0) {
-      if (command !== "root" || !args[taskFile + 1] || args.includes("--task"))
-        throw new Error("Use root --task-file PATH, without --task");
+      if (
+        !["root", "scope-replace"].includes(command) ||
+        !args[taskFile + 1] ||
+        args.includes("--task")
+      )
+        throw new Error(
+          "Use root or scope-replace --task-file PATH, without --task",
+        );
       const task = readFileSync(args[taskFile + 1], "utf8");
       args.splice(taskFile, 2, "--task", task);
     }

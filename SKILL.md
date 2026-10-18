@@ -60,6 +60,8 @@ Use `control --action pause --immediate` for an authorized immediate subtree sto
 
 ## Explicit tasks and dependencies
 
+For an explicit replacement of a subtree's objective, use `scope-replace` with the current `status.workScope.generation`, a stable key and the replacement task; first read [scope replacement](references/operations.md#scope-replacement). Ordinary guidance does not revoke descendant work. Replacement withdraws old queued work and old Turn tool authority, interrupts accepted execution, and waits for reconciliation before new work. Existing descendants wait for new assignments; paused/terminated state and lifetime counts remain intact. Report `draining` with outstanding Attempts/commands/blocks; `ready` permits scheduling but does not prove task completion. Never replay unknown work to clear the barrier. Managed tool contract v2 omits message bodies, assignment text and input previews from status/list; formal delivered input remains the source of message content.
+
 Turn ceilings can be explicitly disabled with `root --max-turns unlimited --max-total-turns unlimited`. To change an existing tree only on user authorization, use `limits --target ROOT_ID --max-turns unlimited --max-total-turns unlimited --reason TEXT`; counters and identities remain intact. `--offline` requires a stopped Coordinator and refuses a live owner. Read [operations](references/operations.md) before changing limits.
 
 Use `limits --target ROOT_ID --max-agents 20 --reason TEXT` for an authorized change to an existing team's lifetime member ceiling. This positive integer includes terminated members and cannot be lower than retained membership; it does not change depth, concurrency or Turn ceilings.

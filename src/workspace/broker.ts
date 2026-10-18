@@ -709,6 +709,9 @@ export class WorkspaceBroker {
     for (const [id, running] of this.running)
       if (!agentId || id === agentId) running.controller.abort();
   }
+  commandRunning(agentId: string) {
+    return this.running.has(agentId);
+  }
   validateCommand(agent: Agent, name: string, value: unknown): TestCommand {
     validateResources(this.policy.readOnlyResources ?? {});
     requireCondition(

@@ -213,6 +213,46 @@ test(
         (after.agents as { attemptCount: number }[])[0]?.attemptCount,
         0,
       );
+      const replacementFile = join(home, "replacement task.txt");
+      const assignment = "新范围\n$(touch never-execute) `literal`";
+      writeFileSync(replacementFile, assignment);
+      const wrapper = fileURLToPath(
+        new URL("../../scripts/cat.mjs", import.meta.url),
+      );
+      const replace = async () =>
+        JSON.parse(
+          (
+            await execute(
+              process.execPath,
+              [
+                wrapper,
+                "scope-replace",
+                "--state",
+                state,
+                "--target",
+                root.id,
+                "--key",
+                "replacement",
+                "--generation",
+                "0",
+                "--task-file",
+                replacementFile,
+              ],
+              { timeout: 20000 },
+            )
+          ).stdout,
+        );
+      const accepted = await replace();
+      assert.equal(accepted.state, "ready");
+      assert.deepEqual((await replace()).receipt, accepted.receipt);
+      const replaced = await call("status", "--target", root.id);
+      assert.equal(replaced.task, assignment);
+      assert.equal(replaced.desired, "paused");
+      assert.equal(replaced.attemptCount, 0);
+      assert.equal(
+        (replaced.workScope as { generation: number }).generation,
+        1,
+      );
     } finally {
       try {
         if (existsSync(join(state, "control.sock"))) await call("stop");

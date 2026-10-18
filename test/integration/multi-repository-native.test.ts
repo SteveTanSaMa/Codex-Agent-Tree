@@ -59,7 +59,8 @@ test(
     );
     const runtime = new CodexRuntime({
       home,
-      expectedVersion: "codex-cli 0.162.0-alpha.17.2",
+      expectedVersion:
+        process.env.CAT_TEST_EXPECTED_VERSION ?? "codex-cli 0.162.0-alpha.17.2",
     });
     try {
       const policy = multiWorkspacePolicy({

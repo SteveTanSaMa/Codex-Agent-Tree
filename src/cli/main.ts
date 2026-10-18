@@ -332,6 +332,22 @@ async function serve() {
               (p.delivery ?? "auto") as "auto" | "queue" | "steer",
             );
             result = { messageId: guidance.message_id, guidance };
+          } else if (input.method === "command-review") {
+            result = await coordinator.reviewUnknownCommand(
+              text(p.target, "target", 256),
+              text(p.callId, "call ID", 256),
+              text(p.reason, "review reason", 2048),
+            );
+          } else if (input.method === "scope-replace") {
+            result = await coordinator.replaceScope(
+              text(p.target, "target", 256),
+              text(p.requestKey, "request key", 128),
+              integer(
+                p.expectedGeneration as number,
+                "expected scope generation",
+              ),
+              text(p.task, "replacement assignment"),
+            );
           } else if (input.method === "control") {
             const { immediate, ...rest } = p;
             requireCondition(
@@ -846,6 +862,34 @@ try {
         }),
       ),
     );
+  else if (command === "command-review")
+    console.log(
+      JSON.stringify(
+        await request("command-review", {
+          target: text(flag("target"), "target"),
+          callId: text(flag("call-id"), "call ID", 256),
+          reason: text(flag("reason"), "review reason", 2048),
+        }),
+        null,
+        2,
+      ),
+    );
+  else if (command === "scope-replace")
+    console.log(
+      JSON.stringify(
+        await request("scope-replace", {
+          target: text(flag("target"), "target"),
+          requestKey: text(flag("key"), "request key", 128),
+          expectedGeneration: integer(
+            Number(flag("generation")),
+            "expected scope generation",
+          ),
+          task: text(flag("task"), "replacement assignment"),
+        }),
+        null,
+        2,
+      ),
+    );
   else if (command === "control")
     console.log(
       JSON.stringify(
@@ -863,7 +907,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, scope-replace --target ID --key KEY --generation N --task TEXT, command-review --target ID --call-id ID --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

@@ -39,7 +39,8 @@ test(
     );
     const runtime = new CodexRuntime({
       home,
-      expectedVersion: "codex-cli 0.162.0-alpha.17.2",
+      expectedVersion:
+        process.env.CAT_TEST_EXPECTED_VERSION ?? "codex-cli 0.162.0-alpha.17.2",
     });
     try {
       await runtime.connect();
@@ -125,7 +126,8 @@ test(
     const options = {
       stateDirectory: join(home, "team"),
       runtimeHome: home,
-      expectedVersion: "codex-cli 0.162.0-alpha.17.2",
+      expectedVersion:
+        process.env.CAT_TEST_EXPECTED_VERSION ?? "codex-cli 0.162.0-alpha.17.2",
     };
     const first = new CodexRuntime({
       home,

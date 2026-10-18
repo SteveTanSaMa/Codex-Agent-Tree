@@ -47,7 +47,9 @@ export class TaskBoard {
   private rows(treeId: string): Task[] {
     const db = this.context.db;
     const rows = db
-      .prepare("SELECT * FROM tasks WHERE tree_id=? ORDER BY created_at,id")
+      .prepare(
+        "SELECT t.*,i.replacement_id AS withdrawn_by FROM tasks t LEFT JOIN scope_invalid_tasks i ON i.task_id=t.id WHERE t.tree_id=? ORDER BY t.created_at,t.id",
+      )
       .all(treeId) as Row[];
     const deps = db
       .prepare(
@@ -87,6 +89,9 @@ export class TaskBoard {
       writeScopes: writeScopes.get(String(r.id)) ?? [],
       ready: false,
       writeScopeWarnings: [],
+      ...(r.withdrawn_by === null || r.withdrawn_by === undefined
+        ? {}
+        : { withdrawnBy: String(r.withdrawn_by) }),
     }));
     const byId = new Map(tasks.map((task) => [task.id, task]));
     const positions = new Map(tasks.map((task, index) => [task.id, index]));
@@ -243,6 +248,17 @@ export class TaskBoard {
           time,
         );
       this.relatedRows(task);
+      this.context.db
+        .prepare("INSERT INTO work_refs VALUES('task',?,?,?)")
+        .run(
+          task.id,
+          caller.id,
+          Number(
+            this.context.db
+              .prepare("SELECT generation FROM work_epochs WHERE agent_id=?")
+              .get(caller.id)!.generation,
+          ),
+        );
       const result = this.get(actor, target, task.id);
       this.save(
         treeId,
@@ -270,6 +286,13 @@ export class TaskBoard {
       const all = this.rows(treeId);
       const task = all.find((t) => t.id === input.taskId);
       requireCondition(task, "NOT_FOUND", "Task not found in caller tree");
+      requireCondition(
+        !this.context.db
+          .prepare("SELECT task_id FROM scope_invalid_tasks WHERE task_id=?")
+          .get(task.id),
+        "STATE_BLOCKED",
+        "Task belongs to a withdrawn scope; create a new task",
+      );
       requireCondition(
         task.revision === input.expectedRevision,
         "STALE_REVISION",

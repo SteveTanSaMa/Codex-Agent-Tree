@@ -203,6 +203,18 @@ export class InteractionState {
         .prepare("SELECT * FROM operator_guidance WHERE message_id=?")
         .get(id) as unknown as Guidance;
       requireCondition(g, "NOT_FOUND", "Guidance not found");
+      if (state === "deferred") {
+        const current = this.c.db
+          .prepare(
+            "SELECT 1 FROM work_refs r JOIN work_epochs e ON e.agent_id=r.agent_id AND e.generation=r.generation WHERE r.kind='message' AND r.object_id=? AND r.agent_id=?",
+          )
+          .get(id, g.agent_id);
+        requireCondition(
+          current,
+          "STATE_BLOCKED",
+          "Withdrawn guidance cannot be retried into a new scope",
+        );
+      }
       this.c.db
         .prepare(
           "UPDATE operator_guidance SET state=?,reason=? WHERE message_id=?",

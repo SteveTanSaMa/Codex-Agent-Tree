@@ -113,9 +113,9 @@ Validated on macOS arm64, Node 26.3.1, one credential domain (file-backed login 
 
 ## Usage evidence reconciliation
 
-Current main upgrades to schema 12, adding an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+Current main upgrades to schema 13, adding durable work-scope epochs and replacement receipts alongside an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Older source refuses schema 12. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Beta 2 and older source refuse schema 13. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Third-party provider configuration
 
@@ -170,4 +170,35 @@ Read [interactive control](../docs/interactive-control.md) for current-Turn guid
 4. Start the same state with the new source. Compare stable Agent IDs, binding Thread IDs/generations, historical Attempt IDs, counters and workspace files against the backup. Review reconciliation errors and unknown evidence before dispatching tests. Old policy and limits remain intact; enabling interactive policy or changing reminders is a separate explicit operator action.
 5. Validate with bounded work, then check restart continuity and reminder/event cursors. An interrupted Turn without final usage must retain unknown accounting. Do not replay it or invent a final receipt merely to clean the display.
 
-Schema 12 is one-way. Rollback requires the matching old source and pre-upgrade state backup, with reconciliation of any native work accepted after that backup. Never restore the old database over a live Coordinator or run both versions as owners. See the [existing-team validation](../docs/upgrade-validation.md) for the tested scope and retained uncertainty.
+Schema 13 is one-way. Rollback requires the matching old source and pre-upgrade state backup, with reconciliation of any native work accepted after that backup. Never restore the old database over a live Coordinator or run both versions as owners. See the [existing-team validation](../docs/upgrade-validation.md) for the tested scope and retained uncertainty.
+
+## Scope replacement
+
+Development after Beta 2 adds operator-only subtree replacement (schema 13). The published Beta 2 ZIP does not contain this command. Ordinary `steer` changes current input; pause drains and retains queues. Neither automatically retracts descendant assignments.
+
+Read `status.workScope.generation`, then submit a replacement with that exact generation and a stable key:
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" status --state "$STATE" --target ROOT_ID
+node "$SKILL_DIR/scripts/cat.mjs" scope-replace --state "$STATE" --target ROOT_ID --generation 0 --key change-001 --task-file /absolute/path/new-task.txt
+```
+
+Retry an uncertain request with the same key, generation and text. A changed key is a new request; a stale generation fails. The immutable `receipt` identifies the accepted replacement; `state`, `attempts`, `commands` and `blocks` report current draining progress. `status.workScope.replacement` provides subsequent progress. Once `ready`, new input may be scheduled, subject to existing controls and budgets; ready is not task completion.
+
+Replacement advances each existing member's work generation and withdraws queued human/Agent inputs, including queued reports sent by affected members to other branches. Prepared unsent Turns are cancelled without refunding lifetime Turn counts. Running/starting/unknown Turns retain their actual states for native reconciliation. Their subsequent tool requests are rejected as withdrawn work; already accepted external effects cannot be undone. Delivered but unconsumed inputs remain unknown rather than becoming successful receipts.
+
+The target receives the new assignment; existing descendants wait for explicit new assignments rather than automatically repeating their old initial tasks. Old unfinished Tasks owned by affected members, and unowned Tasks created by them, become immutable deleted records. Completed Tasks and work owned outside the subtree are retained. Create new Tasks for the new objective. Pauses and termination remain in effect; replacement does not bypass them. A terminated target cannot be replaced; terminated descendants stay terminated. New work continues existing Native Threads, whose historical context is not erased.
+
+Choose Root to replace the entire team's objective. Replacing only a child subtree does not revoke an outside parent's authority to send new work afterward. A newly accepted replacement renews the human autonomy check-in epoch once, while task-wide totals/budgets and usage reminders remain intact; retrying its receipt does not renew that epoch again.
+
+An old Turn, unknown guidance, quarantined native execution or unresolved command receipt keeps the replacement draining. Use `native-history`, events and existing guidance/quarantine review procedures. Withdrawn guidance cannot use `retry-next` to reenter a new scope. If a command's outcome cannot be recovered, an operator may explicitly acknowledge having inspected its effects and stopped any surviving process:
+
+```sh
+node "$SKILL_DIR/scripts/cat.mjs" command-review --state "$STATE" --target AGENT_ID --call-id NATIVE_CALL_ID --reason 'Inspected effects and verified no process remains; final outcome unknown'
+```
+
+This is available only after native execution is settled and no host command is running. It records `reviewed-unknown`, retains unknown outcome and usage, and permits draining to finish. It does not report success, enable replay or undo effects. The same review/reason is idempotent. Managed Agents cannot perform this operator review.
+
+Managed `agent_status`, `agent_list` and control responses use tool contract v2: message bodies, assignment text and Attempt input previews are omitted. Formally delivered input supplies message content. Operator diagnostics retain previews. Existing Thread history is not redacted by this change.
+
+范围替换为操作者专用：使用当前代际和固定 key 提交，旧队列被撤销，旧执行先中断/对账，新工作随后准入。子节点等待新分配，人工暂停、永久终止、历史计数和未知用量均不重置。`ready` 表示排空完成，不表示业务任务完成；`reviewed-unknown` 只是人工确认已检查未知命令，不是成功收据，也不允许重放。

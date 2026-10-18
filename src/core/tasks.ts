@@ -26,6 +26,7 @@ export interface Task {
   updatedAt: string;
   ready: boolean;
   writeScopeWarnings: string[];
+  withdrawnBy?: string;
 }
 function fields(value: unknown, allowed: string[]): Record<string, unknown> {
   requireCondition(
@@ -192,13 +193,16 @@ export function taskSummary(task: Task) {
   };
 }
 export function validateTaskGraph(tasks: Task[]): void {
+  const withdrawn = new Set(
+    tasks.filter((t) => t.withdrawnBy !== undefined).map((t) => t.id),
+  );
   const live = new Map(
     tasks.filter((t) => t.status !== "deleted").map((t) => [t.id, t]),
   );
   const remaining = new Set(live.keys());
   for (const task of live.values()) {
     requireCondition(
-      task.blockedBy.every((id) => live.has(id)),
+      task.blockedBy.every((id) => live.has(id) || withdrawn.has(id)),
       "INVALID_INPUT",
       "Task dependency is missing, deleted or outside the tree",
     );

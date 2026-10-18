@@ -228,13 +228,13 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_list",
-    "List the Agents in your tree with stable IDs, parents, Threads, attempts and message states.",
+    "List the Agents in your tree with stable IDs, parents, Threads, attempts and message states. Contract v2: message bodies, assignment text and attempt input previews are omitted; only formally delivered input authorizes message handling.",
     {},
     [],
   ),
   tool(
     "agent_status",
-    "Read your status or another Agent in your tree.",
+    "Read your status or another Agent in your tree. Contract v2 omits message bodies, assignment text and attempt input previews. Await formal delivery for message content.",
     { target: string },
     [],
   ),

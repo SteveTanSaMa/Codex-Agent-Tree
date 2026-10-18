@@ -306,6 +306,7 @@ export class Coordinator {
     const binding = this.store.binding(target);
     if (
       mode === "queue" ||
+      this.store.scopes.blocked(target) ||
       (mode === "auto" && !interactive) ||
       !active ||
       !this.runtime.steerTurn
@@ -388,7 +389,9 @@ export class Coordinator {
         const members = this.store.subtree(root.id);
         const working = members.some(
           (a) =>
-            (a.turns === 0 && a.desired === "active") ||
+            (a.turns === 0 &&
+              a.desired === "active" &&
+              this.store.scopes.epoch(a.id).initialEnabled) ||
             this.store
               .attempts(a.id)
               .some((t) =>
@@ -463,150 +466,172 @@ export class Coordinator {
     try {
       do {
         this.tickRequested = false;
-        for (const snapshot of this.store.agents()) {
-          if (this.stopping || !this.ready) break;
-          const agent = this.store.agent(snapshot.id);
-          if (agent.desired !== "active") continue;
-          const attempts = this.store.attempts(agent.id);
-          if (
-            attempts.some((a) =>
-              ["starting", "running", "unknown"].includes(a.state),
-            )
-          )
-            continue;
-          const prepared = attempts.find((a) => a.state === "prepared");
-          const pendingMessages = this.store
-            .messages(agent.id)
-            .filter((m) => m.status === "queued");
-          const queued: typeof pendingMessages = [];
-          let encodedSize = 0;
-          for (const message of pendingMessages) {
-            const size = JSON.stringify({
-              id: message.id,
-              sender: message.sender_id,
-              message: message.body,
-            }).length;
-            if (size > 44000) {
-              this.store.rejectQueuedMessage(
-                agent.id,
-                message.id,
-                `Serialized message exceeds the 44000-character delivery limit (${size})`,
-              );
-              continue;
-            }
-            if (queued.length >= 20 || encodedSize + size > 44000) break;
-            queued.push(message);
-            encodedSize += size;
+        this.store.scopes.advance();
+        const queue = this.store.agents();
+        let next = 0;
+        const worker = async () => {
+          while (next < queue.length && this.ready && !this.stopping) {
+            const agent = queue[next++]!;
+            await this.scheduleAgent(agent);
           }
-          if (!prepared && attempts.length > 0 && !queued.length) continue;
-          try {
-            await this.ensureBinding(agent);
-            if (this.stopping || !this.ready) break;
-            const binding = this.store.binding(agent.id)!;
-            const native = record(
-              (await this.runtime.readThread(binding.thread_id, false)).thread,
-            );
-            const nativeStatus = record(native.status);
-            this.store.observeSession(agent.id, nativeStatus);
-            if (nativeStatus.type === "active") {
-              this.store.blockRuntime(
-                agent.id,
-                "Native Thread is active without a locally owned running attempt",
-              );
-              throw new AgentTreeError(
-                "STATE_BLOCKED",
-                "Unmanaged native execution requires reconciliation",
-              );
-            }
-            requireCondition(
-              nativeStatus.type === "idle",
-              "STATE_BLOCKED",
-              "Native Thread is not idle",
-            );
-            let attempt = prepared;
-            if (!attempt) {
-              const input = queued.length
-                ? `${attempts.length === 0 ? `Initial assignment: ${agent.task}\n` : ""}Incoming messages: ${JSON.stringify(queued.map((m) => ({ id: m.id, sender: m.sender_id, message: m.body })))}. Handle them, report to your parent if needed, and call agent_ack with their IDs. End this Turn without spawning unless the task explicitly requires it.`
-                : agent.task;
-              attempt = this.store.prepare(
-                agent.id,
-                `You are ${agent.name}. Your stable Agent ID is ${agent.id}; your parent ID is ${agent.parent_id ?? "none (root)"}.\n${input}`,
-                null,
-                queued[0] ? String(queued[0].id) : null,
-                queued.map((m) => m.id),
-              );
-            }
-            this.store.note(
-              agent.id,
-              "turn.runtime_metadata",
-              {
-                configuredModel:
-                  typeof native.model === "string" ? native.model : null,
-                configuredProvider:
-                  typeof native.modelProvider === "string"
-                    ? native.modelProvider
-                    : null,
-                threadId: binding.thread_id,
-              },
-              attempt.id,
-            );
-            this.store.markStarting(attempt.id);
-            try {
-              const turnId = await this.runtime.startTurn(
-                attempt.thread_id,
-                attempt.input,
-                attempt.id,
-              );
-              const current = this.store.attempt(attempt.id);
-              if (current.state === "starting")
-                this.store.attachTurn(
-                  current.id,
-                  current.binding_generation,
-                  turnId,
-                );
-              else
-                requireCondition(
-                  current.turn_id === turnId,
-                  "CONFLICT",
-                  "Turn ACK differs from observed event",
-                );
-              this.store.clearRecoveredRuntimeBlock(current.agent_id);
-              if (
-                ["cancelled", "terminated"].includes(
-                  this.store.agent(current.agent_id).desired,
-                ) ||
-                this.store.interaction.mustInterrupt(current.agent_id)
-              )
-                await this.interrupt([this.store.attempt(current.id)]);
-            } catch (error) {
-              const current = this.store.attempt(attempt.id);
-              if (["starting", "running"].includes(current.state))
-                this.store.uncertain(
-                  current.id,
-                  "Turn dispatch failed or ACK lost; inspect native history before retry",
-                );
-              throw error;
-            }
-          } catch (error) {
-            if (
-              error instanceof AgentTreeError &&
-              ["STATE_BLOCKED", "BUDGET_EXHAUSTED"].includes(error.code)
-            )
-              continue;
-            this.recordError(error);
-            this.store.note(agent.id, "scheduler.error", {
-              code:
-                error instanceof AgentTreeError ? error.code : "RUNTIME_ERROR",
-              message:
-                error instanceof AgentTreeError
-                  ? error.message
-                  : "Runtime operation failed; inspect correlated state",
-            });
-          }
-        }
+        };
+        // Only independent preflight RPCs overlap. Store.prepare/markStarting
+        // still serialize admission and validate the current scope at dispatch.
+        const results = await Promise.allSettled(
+          Array.from({ length: Math.min(3, queue.length) }, worker),
+        );
+        for (const result of results)
+          if (result.status === "rejected") this.recordError(result.reason);
       } while (this.tickRequested && this.ready && !this.stopping);
     } finally {
       this.ticking = false;
+    }
+  }
+  private async scheduleAgent(snapshot: Agent) {
+    if (this.stopping || !this.ready) return;
+    const agent = this.store.agent(snapshot.id);
+    if (agent.desired !== "active") return;
+    if (this.store.scopes.blocked(agent.id)) return;
+    const scopeGeneration = this.store.scopes.epoch(agent.id).generation;
+    const attempts = this.store.attempts(agent.id);
+    if (
+      attempts.some((a) => ["starting", "running", "unknown"].includes(a.state))
+    )
+      return;
+    const prepared = attempts.find((a) => a.state === "prepared");
+    const pendingMessages = this.store
+      .messages(agent.id)
+      .filter((m) => m.status === "queued");
+    const queued: typeof pendingMessages = [];
+    let encodedSize = 0;
+    for (const message of pendingMessages) {
+      const size = JSON.stringify({
+        id: message.id,
+        sender: message.sender_id,
+        message: message.body,
+      }).length;
+      if (size > 44000) {
+        this.store.rejectQueuedMessage(
+          agent.id,
+          message.id,
+          `Serialized message exceeds the 44000-character delivery limit (${size})`,
+        );
+        continue;
+      }
+      if (queued.length >= 20 || encodedSize + size > 44000) break;
+      queued.push(message);
+      encodedSize += size;
+    }
+    if (
+      !prepared &&
+      !queued.length &&
+      (attempts.length > 0 || !this.store.scopes.epoch(agent.id).initialEnabled)
+    )
+      return;
+    try {
+      await this.ensureBinding(agent);
+      if (this.stopping || !this.ready) return;
+      const binding = this.store.binding(agent.id)!;
+      const native = record(
+        (await this.runtime.readThread(binding.thread_id, false)).thread,
+      );
+      const nativeStatus = record(native.status);
+      this.store.observeSession(agent.id, nativeStatus);
+      if (
+        scopeGeneration !== this.store.scopes.epoch(agent.id).generation ||
+        this.store.scopes.blocked(agent.id)
+      )
+        return;
+      if (nativeStatus.type === "active") {
+        this.store.blockRuntime(
+          agent.id,
+          "Native Thread is active without a locally owned running attempt",
+        );
+        throw new AgentTreeError(
+          "STATE_BLOCKED",
+          "Unmanaged native execution requires reconciliation",
+        );
+      }
+      requireCondition(
+        nativeStatus.type === "idle",
+        "STATE_BLOCKED",
+        "Native Thread is not idle",
+      );
+      let attempt = prepared;
+      if (!attempt) {
+        const input = queued.length
+          ? `${attempts.length === 0 && this.store.scopes.epoch(agent.id).initialEnabled ? `Initial assignment: ${agent.task}\n` : ""}Incoming messages: ${JSON.stringify(queued.map((m) => ({ id: m.id, sender: m.sender_id, message: m.body })))}. Handle them, report to your parent if needed, and call agent_ack with their IDs. End this Turn without spawning unless the task explicitly requires it.`
+          : agent.task;
+        attempt = this.store.prepare(
+          agent.id,
+          `You are ${agent.name}. Your stable Agent ID is ${agent.id}; your parent ID is ${agent.parent_id ?? "none (root)"}. Work scope generation: ${this.store.scopes.epoch(agent.id).generation}. Earlier assignments from withdrawn generations are no longer authorized.\n${input}`,
+          null,
+          queued[0] ? String(queued[0].id) : null,
+          queued.map((m) => m.id),
+        );
+      }
+      this.store.note(
+        agent.id,
+        "turn.runtime_metadata",
+        {
+          configuredModel:
+            typeof native.model === "string" ? native.model : null,
+          configuredProvider:
+            typeof native.modelProvider === "string"
+              ? native.modelProvider
+              : null,
+          threadId: binding.thread_id,
+        },
+        attempt.id,
+      );
+      this.store.markStarting(attempt.id);
+      try {
+        const turnId = await this.runtime.startTurn(
+          attempt.thread_id,
+          attempt.input,
+          attempt.id,
+        );
+        const current = this.store.attempt(attempt.id);
+        if (current.state === "starting")
+          this.store.attachTurn(current.id, current.binding_generation, turnId);
+        else
+          requireCondition(
+            current.turn_id === turnId,
+            "CONFLICT",
+            "Turn ACK differs from observed event",
+          );
+        this.store.clearRecoveredRuntimeBlock(current.agent_id);
+        if (
+          ["cancelled", "terminated"].includes(
+            this.store.agent(current.agent_id).desired,
+          ) ||
+          this.store.interaction.mustInterrupt(current.agent_id) ||
+          this.store.scopes.blocked(current.agent_id)
+        )
+          await this.interrupt([this.store.attempt(current.id)]);
+      } catch (error) {
+        const current = this.store.attempt(attempt.id);
+        if (["starting", "running"].includes(current.state))
+          this.store.uncertain(
+            current.id,
+            "Turn dispatch failed or ACK lost; inspect native history before retry",
+          );
+        throw error;
+      }
+    } catch (error) {
+      if (
+        error instanceof AgentTreeError &&
+        ["STATE_BLOCKED", "BUDGET_EXHAUSTED"].includes(error.code)
+      )
+        return;
+      this.recordError(error);
+      this.store.note(agent.id, "scheduler.error", {
+        code: error instanceof AgentTreeError ? error.code : "RUNTIME_ERROR",
+        message:
+          error instanceof AgentTreeError
+            ? error.message
+            : "Runtime operation failed; inspect correlated state",
+      });
     }
   }
   private eventAttempt(threadId: string, turnId: string): Attempt | undefined {
@@ -656,9 +681,10 @@ export class Coordinator {
       if (observed) this.store.clearRecoveredRuntimeBlock(observed.agent_id);
       if (
         observed &&
-        ["cancelled", "terminated"].includes(
+        (["cancelled", "terminated"].includes(
           this.store.agent(observed.agent_id).desired,
-        )
+        ) ||
+          this.store.scopes.blocked(observed.agent_id))
       )
         await this.interrupt([observed]);
       else if (!observed) {
@@ -928,7 +954,7 @@ export class Coordinator {
         listInput(p.arguments);
         output = this.store
           .agents(this.store.agent(actor.agentId).tree_id)
-          .map((a) => this.status(a.id));
+          .map((a) => this.managedStatus(a.id));
       } else if (tool === "agent_status") {
         const target = statusInput(p.arguments) ?? actor.agentId;
         requireCondition(
@@ -937,7 +963,7 @@ export class Coordinator {
           "FORBIDDEN",
           "Status outside caller tree",
         );
-        output = this.status(target);
+        output = this.managedStatus(target);
       } else if (tool === "agent_control") {
         const input = controlInput(p.arguments);
         const attempts = this.store.control(
@@ -948,7 +974,7 @@ export class Coordinator {
         );
         this.cancelWorkspaceTests();
         await this.interrupt(attempts);
-        output = this.status(input.target);
+        output = this.managedStatus(input.target);
       } else throw new AgentTreeError("INVALID_INPUT", "Unknown Agent tool");
       this.store.note(actor.agentId, "tool.completed", { tool });
       this.runtime.respond(request, {
@@ -980,12 +1006,12 @@ export class Coordinator {
   }
   status(agentId: string) {
     const agent = this.store.agent(agentId);
-    const attempts = this.store.attempts(agentId);
-    const active = attempts.find((a) =>
-      ["prepared", "starting", "running", "unknown"].includes(a.state),
-    );
+    const attempts = this.store.attempts(agentId, 20);
+    const count = this.store.attemptCount(agentId);
+    const active = this.store.activeAttempt(agentId);
     return {
       ...agent,
+      workScope: this.store.scopes.summary(agentId),
       workspace: this.workspace
         ? {
             ...this.workspace.describe(agent),
@@ -1008,7 +1034,7 @@ export class Coordinator {
       executionLimits: this.store.executionStatus(agent.tree_id),
       interaction: this.store.interaction.summary(agentId),
       execution: active?.state ?? (attempts.length ? "idle" : "initializing"),
-      attemptCount: attempts.length,
+      attemptCount: count,
       attempts: attempts.slice(-20).map((a) => {
         const { input, ...summary } = a;
         return {
@@ -1018,11 +1044,21 @@ export class Coordinator {
           usageReceipts: this.store.usageReceipts(a.id),
         };
       }),
-      messageCount: this.store.messages(agentId).length,
+      messageCount: this.store.messageCounts(agentId).total,
       messages: this.store
-        .messages(agentId)
-        .slice(-50)
+        .messages(agentId, 50)
         .map((m) => ({ ...m, body: m.body.slice(0, 2000) })),
+    };
+  }
+  private managedStatus(agentId: string) {
+    const { task: _assignment, ...status } = this.status(agentId);
+    return {
+      ...status,
+      toolContractVersion: 2,
+      messages: status.messages.map(({ body: _body, ...metadata }) => metadata),
+      attempts: status.attempts.map(
+        ({ inputSummary: _input, ...metadata }) => metadata,
+      ),
     };
   }
   view(target: string) {
@@ -1033,12 +1069,10 @@ export class Coordinator {
     const reasons: { agentId: string | null; code: string }[] = [];
     let progressPossible = false;
     const agents = this.store.agents(treeId).map((agent) => {
-      const attempts = this.store.attempts(agent.id);
-      const active = attempts.find((a) =>
-        ["prepared", "starting", "running", "unknown"].includes(a.state),
-      );
-      const messages = this.store.messages(agent.id);
-      const queued = messages.filter((m) => m.status === "queued").length;
+      const attempts = this.store.attempts(agent.id, 1);
+      const active = this.store.activeAttempt(agent.id);
+      const messages = this.store.messageCounts(agent.id);
+      const queued = messages.queued;
       const block = this.store.runtimeBlock(agent.id);
       const unknownGuidance = this.store.interaction
         .guidance(agent.id)
@@ -1047,13 +1081,18 @@ export class Coordinator {
         reasons.push({ agentId: agent.id, code: "unknown-guidance" });
       if (agent.desired !== "active")
         reasons.push({ agentId: agent.id, code: agent.desired });
+      if (this.store.scopes.blocked(agent.id))
+        reasons.push({ agentId: agent.id, code: "scope-draining" });
       if (block) reasons.push({ agentId: agent.id, code: "quarantined" });
       if (active?.state === "unknown")
         reasons.push({ agentId: agent.id, code: "unknown-execution" });
       if (active && ["starting", "running"].includes(active.state))
         progressPossible = true;
       const hasWork =
-        queued > 0 || agent.turns === 0 || active?.state === "prepared";
+        queued > 0 ||
+        (agent.turns === 0 &&
+          this.store.scopes.epoch(agent.id).initialEnabled) ||
+        active?.state === "prepared";
       if (hasWork) {
         const exhausted =
           !active &&
@@ -1067,6 +1106,7 @@ export class Coordinator {
         if (
           agent.desired === "active" &&
           !block &&
+          !this.store.scopes.blocked(agent.id) &&
           !unknownGuidance &&
           active?.state !== "unknown" &&
           !exhausted &&
@@ -1087,14 +1127,14 @@ export class Coordinator {
         execution: active?.state ?? (agent.turns ? "idle" : "initializing"),
         threadId: binding?.thread_id ?? null,
         bindingGeneration: binding?.generation ?? null,
-        attemptCount: attempts.length,
+        attemptCount: this.store.attemptCount(agent.id),
         latestAttemptId: attempts.at(-1)?.id ?? null,
         resultPreview: attempts.at(-1)?.result?.slice(0, 1000) ?? null,
         messages: {
           queued,
-          uncertain: messages.filter((m) => m.status === "unknown").length,
-          rejected: messages.filter((m) => m.status === "rejected").length,
-          processed: messages.filter((m) => m.status === "processed").length,
+          uncertain: messages.unknown,
+          rejected: messages.rejected,
+          processed: messages.processed,
         },
       };
     });
@@ -1291,6 +1331,44 @@ export class Coordinator {
       errors: [...this.errors],
     };
   }
+  async replaceScope(
+    target: string,
+    key: string,
+    expectedGeneration: number,
+    assignment: string,
+  ) {
+    const accepted = this.store.scopes.replace(
+      target,
+      key,
+      expectedGeneration,
+      assignment,
+    );
+    // A replay of an already-ready receipt must never cancel newer-scope work.
+    if (accepted.state === "draining")
+      for (const id of accepted.receipt.members) this.workspace?.cancel(id);
+    this.store.scopes.advance();
+    this.background(
+      (async () => {
+        await this.interrupt(
+          accepted.attempts.map((a) => this.store.attempt(String(a.id))),
+        );
+        this.store.scopes.advance();
+        await this.tick();
+      })(),
+    );
+    return this.store.scopes.progress(accepted.receipt.id);
+  }
+  async reviewUnknownCommand(target: string, callId: string, reason: string) {
+    requireCondition(
+      !this.workspace?.commandRunning(target),
+      "STATE_BLOCKED",
+      "Host command is still running",
+    );
+    const review = this.store.reviewUnknownCommand(target, callId, reason);
+    this.store.scopes.advance();
+    this.background(this.tick());
+    return review;
+  }
   async control(
     target: string,
     action: "pause" | "resume" | "cancel" | "terminate",
@@ -1420,7 +1498,8 @@ export class Coordinator {
               ["cancelled", "terminated"].includes(
                 this.store.agent(agent.id).desired,
               ) ||
-              this.store.interaction.mustInterrupt(agent.id)
+              this.store.interaction.mustInterrupt(agent.id) ||
+              this.store.scopes.blocked(agent.id)
             )
               await this.interrupt([this.store.attempt(a.id)]);
             continue;

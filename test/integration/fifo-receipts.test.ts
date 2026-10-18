@@ -147,7 +147,7 @@ test("schema 7 messages backfill historical order once and new messages append d
     );
     assert.equal(
       f.s.db.prepare("SELECT version FROM schema_version").get()?.version,
-      12,
+      13,
     );
   } finally {
     f.close();

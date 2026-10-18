@@ -9,6 +9,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { requireCondition, text, integer } from "../core/errors.ts";
+import {
+  WorkScopes,
+  workScopeSchema,
+  backfillWorkScopes,
+} from "./work-scopes.ts";
 import { TaskBoard } from "./task-board.ts";
 import { InteractionState } from "./interaction.ts";
 import { TokenReminders } from "./token-reminders.ts";
@@ -110,6 +115,7 @@ export class Store {
   readonly ownerId = randomUUID();
   readonly generation: number;
   readonly tasks: TaskBoard;
+  readonly scopes: WorkScopes;
   readonly interaction: InteractionState;
   readonly reminders: TokenReminders;
   private commitWaiters = new Set<() => void>();
@@ -161,7 +167,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -275,7 +281,10 @@ export class Store {
         CREATE TABLE IF NOT EXISTS token_reminders(scope TEXT NOT NULL,target_id TEXT NOT NULL,policy TEXT NOT NULL,last_threshold INTEGER,PRIMARY KEY(scope,target_id));
         CREATE TABLE IF NOT EXISTS token_usage_samples(thread_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),cumulative INTEGER NOT NULL,breakdown TEXT NOT NULL);
       `);
-      this.run("UPDATE schema_version SET version=12");
+      this.db.exec(workScopeSchema);
+      if (Number(this.one("SELECT version FROM schema_version")?.version) < 13)
+        backfillWorkScopes(this.db);
+      this.run("UPDATE schema_version SET version=13");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -313,6 +322,13 @@ export class Store {
       this.db.close();
       throw error;
     }
+    this.scopes = new WorkScopes({
+      db: this.db,
+      transact: (fn) => this.transaction(fn),
+      agent: (id) => this.agent(id),
+      subtree: (id) => this.subtree(id),
+      event: (agent, kind, body) => this.event(agent, kind, body),
+    });
     this.tasks = new TaskBoard({
       db: this.db,
       transact: (operation) => this.transaction(operation),
@@ -440,6 +456,11 @@ export class Store {
       (parent?.depth ?? -1) + 1,
       capacity,
       now(),
+    );
+    this.run(
+      "INSERT INTO work_epochs VALUES(?,?,1)",
+      id,
+      parent ? this.scopes.epoch(parent.id).generation : 0,
     );
     const agent = this.agent(id);
     this.event(agent, "agent.created", {
@@ -675,6 +696,7 @@ export class Store {
       "FORBIDDEN",
       "Tool request does not belong to the active Turn",
     );
+    this.scopes.assertCurrent("attempt", String(a.id), String(b.agent_id));
     return { agentId: String(b.agent_id), threadId, turnId, bindingGeneration };
   }
   beginWorkspaceCommand(
@@ -715,6 +737,7 @@ export class Store {
         fp,
         now(),
       );
+      this.scopes.record("command", callId, agent.id);
       this.event(agent, "workspace.command.accepted", {
         callId,
         turnId: actor.turnId,
@@ -724,22 +747,77 @@ export class Store {
   }
   finishWorkspaceCommand(agentId: string, callId: string, result: unknown) {
     this.transaction(() => {
-      this.run(
+      const receipt = this.run(
         "UPDATE workspace_commands SET state='completed',result_json=? WHERE agent_id=? AND call_id=? AND state='accepted'",
         JSON.stringify(result),
         agentId,
         callId,
       );
-      this.event(this.agent(agentId), "workspace.command.completed", {
-        callId,
-      });
+      this.event(
+        this.agent(agentId),
+        receipt.changes
+          ? "workspace.command.completed"
+          : "workspace.command.late_receipt",
+        {
+          callId,
+        },
+      );
     });
   }
   workspaceCommandSummary(agentId: string) {
     return this.one(
-      "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN state='accepted' THEN 1 ELSE 0 END),0) AS unresolved FROM workspace_commands WHERE agent_id=?",
+      "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN state='accepted' THEN 1 ELSE 0 END),0) AS unresolved,COALESCE(SUM(CASE WHEN state='reviewed-unknown' THEN 1 ELSE 0 END),0) AS reviewedUnknown FROM workspace_commands WHERE agent_id=?",
       agentId,
     );
+  }
+  reviewUnknownCommand(agentId: string, callId: string, reason: string) {
+    text(callId, "native call ID", 256);
+    text(reason, "command review reason", 2048);
+    return this.transaction(() => {
+      const agent = this.agent(agentId);
+      requireCondition(
+        !this.attempts(agentId).some((t) =>
+          ["prepared", "starting", "running", "unknown"].includes(t.state),
+        ) && !this.runtimeBlock(agentId),
+        "STATE_BLOCKED",
+        "Reconcile native execution before reviewing a command",
+      );
+      const row = this.one(
+        "SELECT * FROM workspace_commands WHERE agent_id=? AND call_id=?",
+        agentId,
+        callId,
+      );
+      requireCondition(row, "NOT_FOUND", "Command receipt not found");
+      const review = {
+        outcome: "reviewed-unknown",
+        reason,
+        replayAllowed: false,
+      };
+      if (row.state === "reviewed-unknown") {
+        requireCondition(
+          row.result_json === JSON.stringify(review),
+          "CONFLICT",
+          "Command review changed reason",
+        );
+        return review;
+      }
+      requireCondition(
+        row.state === "accepted",
+        "CONFLICT",
+        "Only unresolved commands require review",
+      );
+      this.run(
+        "UPDATE workspace_commands SET state='reviewed-unknown',result_json=? WHERE agent_id=? AND call_id=?",
+        JSON.stringify(review),
+        agentId,
+        callId,
+      );
+      this.event(agent, "workspace.command.reviewed_unknown", {
+        callId,
+        ...review,
+      });
+      return review;
+    });
   }
   pendingUsageReceipts(agentId: string) {
     return this.all(
@@ -784,6 +862,11 @@ export class Store {
     return this.agent(verified.agentId);
   }
   private dispatchable(agent: Agent): void {
+    requireCondition(
+      !this.scopes.blocked(agent.id),
+      "STATE_BLOCKED",
+      "Scope replacement is draining old execution",
+    );
     // Subtree controls materialize fences for every existing descendant in the same transaction.
     // A single-Agent control intentionally leaves existing children dispatchable.
     requireCondition(
@@ -1163,6 +1246,8 @@ export class Store {
         body,
         now(),
       );
+      this.scopes.record("message", id, sender.id);
+      this.scopes.record("message", id, target);
       const source = this.one(
         "SELECT trace_id FROM turn_attempts WHERE thread_id=? AND turn_id=?",
         actor.threadId,
@@ -1183,8 +1268,21 @@ export class Store {
       return id;
     });
   }
-  messages(agentId: string): Message[] {
+  messages(agentId: string, limit?: number): Message[] {
     this.agent(agentId);
+    if (limit !== undefined) {
+      integer(limit, "message page size", 1);
+      return this.all(
+        `SELECT * FROM (
+        SELECT m.*,o.sequence AS enqueue_sequence,'agent' AS origin FROM messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=?
+        UNION ALL
+        SELECT m.id,NULL AS sender_id,m.recipient_id,m.body,m.status,m.attempt_id,m.created_at,m.processed_at,o.sequence AS enqueue_sequence,'human' AS origin FROM operator_messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=?
+      ) ORDER BY enqueue_sequence DESC LIMIT ?`,
+        agentId,
+        agentId,
+        limit,
+      ).reverse() as unknown as Message[];
+    }
     return [
       ...this.all(
         "SELECT m.*,o.sequence AS enqueue_sequence, 'agent' AS origin FROM messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=?",
@@ -1197,6 +1295,23 @@ export class Store {
     ].sort(
       (a, b) => Number(a.enqueue_sequence) - Number(b.enqueue_sequence),
     ) as unknown as Message[];
+  }
+  messageCounts(agentId: string) {
+    const rows = this.all(
+      "SELECT status,SUM(n) AS n FROM (SELECT status,COUNT(*) AS n FROM messages WHERE recipient_id=? GROUP BY status UNION ALL SELECT status,COUNT(*) AS n FROM operator_messages WHERE recipient_id=? GROUP BY status) GROUP BY status",
+      agentId,
+      agentId,
+    );
+    const counts = Object.fromEntries(
+      rows.map((r) => [String(r.status), Number(r.n)]),
+    );
+    return {
+      total: rows.reduce((n, r) => n + Number(r.n), 0),
+      queued: counts.queued ?? 0,
+      unknown: counts.unknown ?? 0,
+      rejected: counts.rejected ?? 0,
+      processed: counts.processed ?? 0,
+    };
   }
   rejectQueuedMessage(agentId: string, messageId: string, reason: string) {
     text(reason, "delivery failure reason", 2048);
@@ -1251,6 +1366,7 @@ export class Store {
         now(),
       );
       this.event(agent, "operator.message", { messageId: id, inputKey: key });
+      this.scopes.record("message", id, target);
       return id;
     });
   }
@@ -1335,6 +1451,7 @@ export class Store {
         limits.turnReservation,
         now(),
       );
+      this.scopes.record("attempt", id, agentId);
       this.run("INSERT INTO attempt_accounting(attempt_id) VALUES(?)", id);
       this.run(
         "UPDATE agents SET reserved=reserved+?,turns=turns+1 WHERE id=?",
@@ -1384,11 +1501,33 @@ export class Store {
       turnId,
     ) as unknown as Attempt | undefined;
   }
-  attempts(agentId?: string): Attempt[] {
+  attempts(agentId?: string, limit?: number): Attempt[] {
+    if (limit !== undefined) {
+      integer(limit, "attempt page size", 1);
+      return this.all(
+        `SELECT * FROM turn_attempts ${agentId ? "WHERE agent_id=?" : ""} ORDER BY created_at DESC,id DESC LIMIT ?`,
+        ...(agentId ? [agentId] : []),
+        limit,
+      ).reverse() as unknown as Attempt[];
+    }
     return this.all(
       `SELECT * FROM turn_attempts ${agentId ? "WHERE agent_id=?" : ""} ORDER BY created_at,id`,
       ...(agentId ? [agentId] : []),
     ) as unknown as Attempt[];
+  }
+  attemptCount(agentId: string) {
+    return Number(
+      this.one(
+        "SELECT COUNT(*) AS n FROM turn_attempts WHERE agent_id=?",
+        agentId,
+      )!.n,
+    );
+  }
+  activeAttempt(agentId: string): Attempt | undefined {
+    return this.one(
+      `SELECT * FROM turn_attempts WHERE agent_id=? AND state IN ${activeAttempts}`,
+      agentId,
+    ) as unknown as Attempt | undefined;
   }
   private currentAttempt(id: string, generation: number): Attempt {
     const a = this.attempt(id);
@@ -1411,6 +1550,7 @@ export class Store {
         "Attempt is not prepared",
       );
       this.dispatchable(this.agent(a.agent_id));
+      this.scopes.assertCurrent("attempt", a.id, a.agent_id);
       this.run("UPDATE turn_attempts SET state='starting' WHERE id=?", id);
     });
   }
