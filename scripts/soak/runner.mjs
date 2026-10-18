@@ -1,3 +1,5 @@
+import { treeBytes } from "./fs-metrics.mjs";
+import { laneIdle, roundReady } from "./quiescence.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
@@ -140,15 +142,7 @@ async function call(lane, ...args) {
 }
 async function idle(lane, timeout = 30000) {
   await until(
-    () =>
-      !rows(
-        lane,
-        "SELECT id FROM turn_attempts WHERE state IN ('prepared','starting','running','unknown')",
-      ).length &&
-      !rows(
-        lane,
-        "SELECT id FROM messages WHERE status='queued' UNION ALL SELECT id FROM operator_messages WHERE status='queued'",
-      ).length,
+    () => dbRead(lane, laneIdle),
     "lane did not become idle: " + lane,
     timeout,
   );
@@ -553,15 +547,6 @@ function assertState(lane, final = false) {
       "live work at shutdown",
     );
 }
-function treeSize(dir) {
-  let bytes = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, entry.name);
-    if (entry.isDirectory()) bytes += treeSize(p);
-    else if (entry.isFile()) bytes += lstatSync(p).size;
-  }
-  return bytes;
-}
 let lastSizeAt = 0,
   diskBytes = 0;
 async function sample() {
@@ -666,7 +651,7 @@ async function sample() {
     }),
   );
   if (Date.now() - lastSizeAt > 120000) {
-    diskBytes = treeSize(base);
+    diskBytes = treeBytes(base);
     lastSizeAt = Date.now();
     assert.ok(diskBytes < 4 * 1024 ** 3, "test directory exceeded 4 GiB");
   }
@@ -715,7 +700,22 @@ async function codingLoop() {
         "--message",
         `CATSOAK_${role}_${n}_normal`,
       );
-    await idle("coding", 60000);
+    await until(
+      () =>
+        dbRead("coding", (db) =>
+          roundReady(
+            db,
+            n,
+            identities.lead,
+            ["coderA", "coderB", "reviewer"].map((role) => ({
+              role,
+              id: identities[role],
+            })),
+          ),
+        ),
+      "coding round causal completion barrier timed out",
+      60000,
+    );
     assertState("coding");
     assert.equal(
       readFileSync(join(base, "repo/a.txt"), "utf8"),
@@ -946,6 +946,13 @@ try {
   });
   await initialize("coding", repo);
   await initialize("calibration");
+  await until(
+    () =>
+      agents("coding").length === 4 &&
+      attempts("coding").filter((t) => t.state === "completed").length === 4 &&
+      attempts("calibration").some((t) => t.state === "completed"),
+    "bootstrap causal completion timed out",
+  );
   await idle("coding");
   await idle("calibration");
   for (const a of agents("coding")) {

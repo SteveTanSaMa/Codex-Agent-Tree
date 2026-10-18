@@ -86,3 +86,26 @@ test(
     }
   },
 );
+
+test(
+  "soak launcher refuses an expired retry authorization before touching test paths",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const launcher = fileURLToPath(
+      new URL("../../scripts/soak/launch.py", import.meta.url),
+    );
+    await assert.rejects(
+      execute("python3", [
+        launcher,
+        "--smoke",
+        "--retry-before",
+        "2000-01-01T09:00:00+08:00",
+        "--skill",
+        "/nonexistent-skill-fixture",
+        "--executable",
+        "/nonexistent-codex-fixture",
+      ]),
+      /authorized test-start window has closed/,
+    );
+  },
+);
