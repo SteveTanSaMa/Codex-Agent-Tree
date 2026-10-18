@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | Lifetime Turns per Agent / 单 Agent 累计 Turn | unlimited | 20 |
 | Lifetime tree Turns / 全树累计 Turn | unlimited | 100 |
-| Depth / 累计 Agent / Concurrent Turns | 2 / 16 / 3 | 2 / 16 / 3 |
+| Depth / 累计 Agent / Concurrent Turns | 2 / 20 / 3 | 2 / 20 / 3 |
 | Token policy / warning threshold | observe / 5000000 | observe / 5000000 |
 | Continuous autonomy warning | 900000 ms (15 min) | 900000 ms |
 | Automatic autonomy pause | disabled | disabled |
@@ -23,7 +23,7 @@
 
 15/10 分钟与 8 次是可配置的初始提示值，尚未通过长期负载校准。Batch 仍可显式使用 `unlimited`；交互模式也可显式设置有限 Turn。老团队保留原来的限额和消息排队行为，不会自动获得新策略。升级前停止 Coordinator 并备份完整 state；schema 12 阻止旧源代码误读新状态。升级本身不更换模型、提供商或全局 CLI 配置。
 
-The warning defaults are provisional, configurable hints, not validated performance thresholds. Existing teams retain their limits and queue behavior. Stop and back up the full state before the schema-11 upgrade. Production CLI version pins remain unchanged.
+The warning defaults are provisional, configurable hints, not validated performance thresholds. Existing teams retain their limits and queue behavior. Stop and back up the full state before the schema-12 upgrade. Production CLI version pins remain unchanged.
 
 ## Send, steer, pause / 输入、引导、暂停
 
@@ -92,3 +92,5 @@ Deterministic coverage includes idempotent live steering without new Turns, next
 Validation on 2026-10-16: **127 default passes** (8 unit + 119 integration; 6 native skips), **31 fault passes**, and **1 separately executed loopback native pass**. Packaging checks all local Skill references. Typecheck, changed-file formatting and Skill metadata validation passed. Existing teams were not hot-upgraded. If an App update replaces its bundled CLI, select a matching retained binary via `init --executable`; do not bypass the production version check. This probe used a retained matching binary after detecting that the App bundle had moved to 0.163.
 
 Token reminder configuration is now separate from task budgets: see [token reminders](token-reminders.md). New public roots do not create legacy per-Agent token allocations. 提醒不暂停任务，也不清空任务预算。
+
+2026-10-18 补验：既有团队 schema 10 → 12 升级、真实第三方模型同 Turn 引导、立即暂停与重启连续性已完成；范围和保留的不确定性见[升级验证](upgrade-validation.md)。Existing-team upgrade, real-provider same-Turn guidance, immediate pause and restart continuity were subsequently verified on 2026-10-18; see the linked record for scope and remaining uncertainty.

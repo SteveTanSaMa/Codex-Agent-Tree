@@ -211,6 +211,7 @@ async function serve() {
               p.patch as {
                 maxTotalTurns?: number | null;
                 maxTurnsPerAgent?: number | null;
+                maxAgents?: number;
               },
               text(p.reason, "reason", 2048),
             );
@@ -710,6 +711,9 @@ try {
     const target = text(flag("target"), "target"),
       reason = text(flag("reason"), "reason", 2048);
     const patch = {
+      ...(flag("max-agents") === undefined
+        ? {}
+        : { maxAgents: integer(Number(flag("max-agents")), "maxAgents", 1) }),
       ...(flag("max-total-turns") === undefined
         ? {}
         : { maxTotalTurns: turnLimit(flag("max-total-turns")) }),
@@ -859,7 +863,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

@@ -58,6 +58,9 @@ async function fixture(
   };
 }
 test("interactive defaults are unlimited; batch and explicit limits remain available", () => {
+  assert.equal(rootSettings({}).limits.maxAgents, 20);
+  assert.equal(rootSettings({ mode: "batch" }).limits.maxAgents, 20);
+  assert.equal(rootSettings({ maxAgents: "7" }).limits.maxAgents, 7);
   assert.equal(rootSettings({}).limits.maxTotalTurns, null);
   assert.equal(rootSettings({}).limits.maxTurnsPerAgent, null);
   assert.equal(rootSettings({ mode: "batch" }).limits.maxTotalTurns, 100);
@@ -72,6 +75,22 @@ test("interactive defaults are unlimited; batch and explicit limits remain avail
     null,
   );
   assert.throws(() => rootSettings({ mode: "nonsense" }), /mode/);
+  assert.throws(
+    () => rootSettings({ tokenPolicy: "invalid" }),
+    /Invalid token policy/,
+  );
+  assert.throws(
+    () => rootSettings({ tokenPolicy: "enforce" }),
+    /per-Agent token allocations/,
+  );
+  assert.throws(
+    () => rootSettings({ maxTotalTurns: "0" }),
+    /Invalid maxTotalTurns/,
+  );
+  assert.throws(
+    () => rootSettings({ maxTurns: "0" }),
+    /Invalid maxTurnsPerAgent/,
+  );
   assert.throws(() => interactionPolicy({ taskTokenBudget: -1 }), /Invalid/);
   assert.throws(() => interactionPolicy({ foo: 1 }), /Unknown/);
 });

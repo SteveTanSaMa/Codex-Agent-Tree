@@ -878,7 +878,11 @@ export class Store {
   /** Operator-only adjustment. No counters, identities or lifecycle fences are reset. */
   setTurnLimits(
     target: string,
-    patch: { maxTotalTurns?: number | null; maxTurnsPerAgent?: number | null },
+    patch: {
+      maxTotalTurns?: number | null;
+      maxTurnsPerAgent?: number | null;
+      maxAgents?: number;
+    },
     reason: string,
   ) {
     text(reason, "limit change reason", 2048);
@@ -887,11 +891,13 @@ export class Store {
         typeof patch === "object" &&
         Object.keys(patch).length > 0 &&
         Object.keys(patch).every((k) =>
-          ["maxTotalTurns", "maxTurnsPerAgent"].includes(k),
+          ["maxTotalTurns", "maxTurnsPerAgent", "maxAgents"].includes(k),
         ),
       "INVALID_INPUT",
-      "Expected Turn limit fields only",
+      "Expected execution limit fields only",
     );
+    if (Object.hasOwn(patch, "maxAgents"))
+      integer(patch.maxAgents!, "maxAgents", 1);
     for (const value of Object.values(patch))
       if (value !== null) integer(value!, "Turn limit", 1);
     return this.transaction(() => {
@@ -906,6 +912,11 @@ export class Store {
             members.every((a) => after.maxTurnsPerAgent! >= a.turns)),
         "CONFLICT",
         "Cannot set a Turn limit below retained usage",
+      );
+      requireCondition(
+        after.maxAgents >= members.length,
+        "CONFLICT",
+        "Cannot set an Agent limit below retained membership",
       );
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         this.run(

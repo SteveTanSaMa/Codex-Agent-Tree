@@ -400,12 +400,19 @@ export class InteractionState {
 /** Public root-command defaults; old persisted trees are never reinterpreted. */
 export function rootSettings(p: Record<string, unknown>) {
   requireCondition(
+    p.tokenPolicy === undefined ||
+      p.tokenPolicy === "observe" ||
+      p.tokenPolicy === "enforce",
+    "INVALID_INPUT",
+    "Invalid token policy",
+  );
+  requireCondition(
     p.tokenPolicy === undefined || p.tokenPolicy === "observe",
     "INVALID_INPUT",
     "New trees use reminders, not per-Agent token allocations; use an optional taskTokenBudget",
   );
-  const limit = (v: unknown) =>
-    v === null || v === "unlimited" ? null : integer(Number(v), "limit", 1);
+  const limit = (v: unknown, name: string) =>
+    v === null || v === "unlimited" ? null : integer(Number(v), name, 1);
   const policy = interactionPolicy({
     mode: p.mode ?? "interactive",
     ...(p.repeatErrorThreshold === undefined
@@ -420,7 +427,7 @@ export function rootSettings(p: Record<string, unknown>) {
         "taskTimeBudgetMs",
       ]
         .filter((k) => p[k] !== undefined)
-        .map((k) => [k, limit(p[k])]),
+        .map((k) => [k, limit(p[k], k)]),
     ),
   });
   const limits = {
@@ -431,6 +438,7 @@ export function rootSettings(p: Record<string, unknown>) {
           ? null
           : 100
         : p.maxTotalTurns,
+      "maxTotalTurns",
     ),
     maxTurnsPerAgent: limit(
       p.maxTurns === undefined
@@ -438,10 +446,11 @@ export function rootSettings(p: Record<string, unknown>) {
           ? null
           : 20
         : p.maxTurns,
+      "maxTurnsPerAgent",
     ),
     tokens: Number(p.tokenAlertAt ?? p.tokens ?? 5000000),
     maxDepth: Number(p.maxDepth ?? 2),
-    maxAgents: Number(p.maxAgents ?? 16),
+    maxAgents: Number(p.maxAgents ?? 20),
     maxConcurrentTurns: Number(p.concurrent ?? 3),
     turnReservation: Number(p.reserve ?? 5000),
   };

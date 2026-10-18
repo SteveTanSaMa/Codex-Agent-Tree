@@ -40,7 +40,7 @@ For multiple repositories, read the manifest and delegation examples in [coding 
 
 Translate the user's objective into a task containing the relevant input, expected output, child roles, and completion criteria. Include: delegate through `agent_spawn`; end the initial Turn after delegation; children report to their parent with `agent_send`; recipients explicitly `agent_ack` delivered messages and synthesize the actual reports. Managed Agents receive these tools automatically; they are not tools exposed in the operator's current chat.
 
-New teams use token observation by default: do not plan token transfers or require child `tokens`. Set structural limits suitable for the task: depth, lifetime Agent count and concurrent Turns. New teams default to interactive mode: depth 2, 16 Agents, 3 concurrent Turns, with unlimited lifetime Turns. `--mode batch` retains 20 Turns per Agent and 100 total; explicit Turn ceilings remain available. A small recursive team usually needs much less; these are ceilings, not targets. Lifetime counts include finished members and failed/interrupted/prepared Turns and survive restart.
+New teams use token observation by default: do not plan token transfers or require child `tokens`. Set structural limits suitable for the task: depth, lifetime Agent count and concurrent Turns. New teams default to interactive mode: depth 2, 20 Agents, 3 concurrent Turns, with unlimited lifetime Turns. `--mode batch` retains 20 Turns per Agent and 100 total; explicit Turn ceilings remain available. A small recursive team usually needs much less; these are ceilings, not targets. Lifetime counts include finished members and failed/interrupted/prepared Turns and survive restart.
 
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" root --state "$STATE" --name Lead --key UNIQUE_TASK_KEY --task-file /absolute/path/task.txt --max-depth 2 --max-agents 3 --concurrent 2 --max-turns 6 --max-total-turns 12
@@ -61,6 +61,8 @@ Use `control --action pause --immediate` for an authorized immediate subtree sto
 ## Explicit tasks and dependencies
 
 Turn ceilings can be explicitly disabled with `root --max-turns unlimited --max-total-turns unlimited`. To change an existing tree only on user authorization, use `limits --target ROOT_ID --max-turns unlimited --max-total-turns unlimited --reason TEXT`; counters and identities remain intact. `--offline` requires a stopped Coordinator and refuses a live owner. Read [operations](references/operations.md) before changing limits.
+
+Use `limits --target ROOT_ID --max-agents 20 --reason TEXT` for an authorized change to an existing team's lifetime member ceiling. This positive integer includes terminated members and cannot be lower than retained membership; it does not change depth, concurrency or Turn ceilings.
 
 New teams have no per-Agent token allocation. Default reminders fire once at 5000000 tree-wide total tokens; `token-reminder` configures per-Agent/tree single or incremental alerts using total, noncached input or output. Read [token reminders](docs/token-reminders.md) for commands and measurement limits. Surface `usage.reminder` events from wait/events once to the user; do not inject them into the managed dialogue. Alerts never pause or create Turns. Users may separately opt into task-wide soft budgets. Legacy enforce trees keep their constraints; never bypass them by recreating a root. Cached input is not a bill.
 

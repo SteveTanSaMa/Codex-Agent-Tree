@@ -1216,7 +1216,11 @@ export class Coordinator {
   }
   setTurnLimits(
     target: string,
-    patch: { maxTotalTurns?: number | null; maxTurnsPerAgent?: number | null },
+    patch: {
+      maxTotalTurns?: number | null;
+      maxTurnsPerAgent?: number | null;
+      maxAgents?: number;
+    },
     reason: string,
   ) {
     const result = this.store.setTurnLimits(target, patch, reason);

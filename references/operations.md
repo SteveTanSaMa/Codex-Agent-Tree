@@ -57,7 +57,7 @@ Events already committed after a cursor are returned immediately; unrelated tree
 
 ## Execution limits and token policy
 
-Interactive root defaults: depth 2, 16 Agents, concurrency 3, unlimited cumulative Turns. Batch keeps 20 Turns per Agent / 100 per tree. Finite explicit limits are admission gates. Depth starts at zero; Agent count is lifetime accepted members, including terminated ones. `--max-turns` applies per Agent; `--max-total-turns` counts all prepared Turns in the tree, including later failures, interruptions and cancelled unsent attempts. Counts survive restart; cancellation never refunds a Turn. A prepared Turn already owns its slot and can finish dispatch when the limit is reached. Limits do not stop a currently executing Turn mid-flight.
+Interactive root defaults: depth 2, 20 Agents, concurrency 3, unlimited cumulative Turns. Batch keeps 20 Turns per Agent / 100 per tree. Finite explicit limits are admission gates. Depth starts at zero; Agent count is lifetime accepted members, including terminated ones. `--max-turns` applies per Agent; `--max-total-turns` counts all prepared Turns in the tree, including later failures, interruptions and cancelled unsent attempts. Counts survive restart; cancellation never refunds a Turn. A prepared Turn already owns its slot and can finish dispatch when the limit is reached. Limits do not stop a currently executing Turn mid-flight.
 
 `status` and `view` expose `executionLimits` with used/remaining tree Turns and structural bounds. `tree-turn-limit` means no further Turns or new children can be admitted. Inspect the requested result and queued work, then report the limit; do not create another root or clear a human fence to evade it.
 
@@ -147,12 +147,27 @@ For an existing tree:
 ```sh
 node "$SKILL_DIR/scripts/cat.mjs" limits --state "$STATE" --target ROOT_ID \
   --max-turns unlimited --max-total-turns unlimited --reason 'Explicit user authorization'
+# Change the lifetime member ceiling without changing Turn limits:
+node "$SKILL_DIR/scripts/cat.mjs" limits --state "$STATE" --target ROOT_ID \
+  --max-agents 20 --reason 'Explicit user authorization'
 ```
 
 Finite integers may also be supplied. The transaction preserves every used Turn, Agent, native binding, and request key, refuses limits below retained usage, and emits `limits.updated` with before/after/reason. Repeating identical values is a no-op. Omit a flag to retain its current value. This operator endpoint does not grant model-callable quota modification.
+
+`--max-agents` accepts a positive integer, never `unlimited`, and cannot be lower than lifetime accepted membership, including terminated Agents. The default for new teams is 20; existing teams retain their stored ceiling until explicitly changed.
 
 `--offline` acquires normal database ownership and refuses a live Coordinator. It is intended for a deliberately stopped service, including upgrading an older service that lacks the online endpoint. Do not restart a working team merely to adjust a ceiling before it matters: wait for a safe execution boundary, preserve queued work, then stop/update/start the same state. A disabled ceiling removes the automatic Turn-count stopping condition; task completion and structural/lifecycle constraints still govern execution.
 
 ## Interactive guidance and protection
 
-Read [interactive control](../docs/interactive-control.md) for current-Turn guidance, stable-key retries, unknown delivery review, immediate pause, tree-wide autonomy clocks and optional soft task budgets. Old trees retain policy and limits. Schema 11 requires a stopped-state backup before upgrade.
+Read [interactive control](../docs/interactive-control.md) for current-Turn guidance, stable-key retries, unknown delivery review, immediate pause, tree-wide autonomy clocks and optional soft task budgets. Old trees retain policy and limits. Schema 12 requires a stopped-state backup before upgrade.
+
+### Upgrading an existing team
+
+1. Run `doctor --state "$STATE"` and inspect `tree`, unknown Attempts, pending messages and active commands. Stop accepting new operator work during the handover. Prefer an idle boundary; `stop` alone leaves accepted native work alive.
+2. Run `stop`, then verify the old Coordinator has exited and its control socket is gone. Back up the entire stopped state directory, including any SQLite sidecars and worktrees. Retain the dedicated runtime home and a copy of its configuration; protect backups like the original state.
+3. If an App update changed the configured executable's version, verify an already retained binary against the exact pin. While stopped, update only this team's `config.json.executable` to that binary. Do not change the version guard, credentials, provider, model or workspace grants to force startup.
+4. Start the same state with the new source. Compare stable Agent IDs, binding Thread IDs/generations, historical Attempt IDs, counters and workspace files against the backup. Review reconciliation errors and unknown evidence before dispatching tests. Old policy and limits remain intact; enabling interactive policy or changing reminders is a separate explicit operator action.
+5. Validate with bounded work, then check restart continuity and reminder/event cursors. An interrupted Turn without final usage must retain unknown accounting. Do not replay it or invent a final receipt merely to clean the display.
+
+Schema 12 is one-way. Rollback requires the matching old source and pre-upgrade state backup, with reconciliation of any native work accepted after that backup. Never restore the old database over a live Coordinator or run both versions as owners. See the [existing-team validation](../docs/upgrade-validation.md) for the tested scope and retained uncertainty.

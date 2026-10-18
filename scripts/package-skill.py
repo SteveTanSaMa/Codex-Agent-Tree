@@ -12,7 +12,7 @@ OUTPUT = ROOT / "dist" / f"codex-agent-tree-{VERSION}.zip"
 FILES = [
     "SKILL.md", "agents/openai.yaml", "scripts/cat.mjs",
     "references/operations.md", "references/coding.md", "package.json", "package-lock.json",
-    "docs/interactive-control.md", "docs/token-reminders.md",
+    "docs/interactive-control.md", "docs/token-reminders.md", "docs/upgrade-validation.md",
     "LICENSE", "NOTICE",
 ]
 FILES += [str(p.relative_to(ROOT)) for p in (ROOT / "src").rglob("*.ts") if p.is_file()]

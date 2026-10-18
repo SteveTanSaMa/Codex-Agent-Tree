@@ -53,6 +53,39 @@ function run(store: Store, id: string) {
 }
 const work = { name: "B", role: "worker", task: "supplied text" };
 
+test("operator member ceiling changes preserve lifetime counts and reject reductions below membership", () => {
+  const f = fixture();
+  try {
+    const root = f.store.createRoot("A", "work", { ...limits, maxAgents: 1 });
+    const a = run(f.store, root.id);
+    assert.throws(() => f.store.spawn(a.actor, "child", work), /Agent limit/);
+    f.store.setTurnLimits(root.id, { maxAgents: 20 }, "user requested 20");
+    const child = f.store.spawn(a.actor, "child", work);
+    f.store.control(null, child.id, "terminate", "agent");
+    assert.throws(
+      () => f.store.setTurnLimits(root.id, { maxAgents: 1 }, "invalid"),
+      /below retained membership/,
+    );
+    assert.throws(
+      () =>
+        f.store.setTurnLimits(root.id, { maxAgents: null as never }, "invalid"),
+      /Invalid maxAgents/,
+    );
+    f.store.setTurnLimits(root.id, { maxAgents: 20 }, "same setting");
+    f.reopen();
+    assert.equal(f.store.executionStatus(root.tree_id).maxAgents, 20);
+    assert.equal(f.store.executionStatus(root.tree_id).createdAgents, 2);
+    assert.equal(f.store.agent(root.id).turns, 1);
+    assert.equal(f.store.binding(root.id)?.thread_id, a.attempt.thread_id);
+    assert.equal(
+      f.store.events(root.id).filter((e) => e.kind === "limits.updated").length,
+      1,
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("new trees observe tokens by default: no child allocation, no admission block, durable actual-usage warning", () => {
   const f = fixture();
   try {
@@ -393,6 +426,8 @@ test("offline operator CLI refuses a live owner and records unlimited updates af
       root.id,
       "--max-total-turns",
       "unlimited",
+      "--max-agents",
+      "20",
       "--max-turns",
       "unlimited",
       "--reason",
@@ -412,6 +447,7 @@ test("offline operator CLI refuses a live owner and records unlimited updates af
       }),
     );
     assert.equal(result.maxTotalTurns, null);
+    assert.equal(result.maxAgents, 20);
     assert.equal(result.maxTurnsPerAgent, null);
     assert.equal(result.usedTurns, 0);
     f.reopen();
