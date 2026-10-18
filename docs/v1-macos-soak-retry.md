@@ -20,7 +20,9 @@
 
 另一测试验证：表面空闲但少一份本轮报告时不能通过；报告对应的 Lead Attempt 尚在运行、Task 未完成或消费 unknown 时也不能通过。只有全部本轮因果证据齐备后才返回 ready。启动器过期授权测试确认 09:00 边界会被执行。
 
-正式复测的启动与最终状态将在 smoke 通过后补入本记录。所有失败原样保留，不将缩时测试、合成 token 或重试次数计为九小时通过。
+默认回归：171 通过、17 条件跳过；类型与格式检查通过。五分钟 smoke `smoke-20261019-015327` 完成 58 轮、1,922 次本地合成请求，三处恢复与历史对账通过，analysis=passed，watchdog exit=0、未触发强制截止。缩时结果不作为长期通过。
+
+新的独立九小时运行 `nine-hour-20261019-015904` 于北京时间 2026-10-19 01:59 启动，预计 10:59 完成，watchdog 最晚约 11:14 清理。基线提交 `487bd91`，仍使用原始 Beta 3 安装包，全部四份冻结文件与通过的 smoke 哈希一致。运行状态尚待最终结果；15 分钟 heartbeat 已恢复，09:00 后不再启动新测试。所有失败原样保留，不将缩时测试、合成 token 或重试次数计为九小时通过。
 
 ## English
 
@@ -29,3 +31,5 @@ The user authorized corrected retries starting before 09:00 Asia/Shanghai on Oct
 The harness now checks quiescence in one SQLite snapshot and requires exact round inputs, reports, completed integration Attempts and Tasks before checking final file values. Bootstrap completion is explicit. A matching smoke is mandatory, and a timezone-aware launcher cutoff rejects expired authorization before touching test paths. Deterministic regressions cover the original race and incomplete causal evidence. Runtime and published Beta 3 assets remain unchanged.
 
 The smoke also exposed a disk-sampling race against removal of CLI temporary plugin files. Sampling skips only ENOENT, never follows symlinks, and still fails on permission or I/O errors. Deterministic tests cover deletion and error propagation; the failed smoke evidence is retained.
+
+Regression validation: 171 passed and 17 conditional skips; type and formatting checks passed. Smoke `smoke-20261019-015327` passed analysis with 58 rounds, 1,922 local synthetic requests, all three recovery checkpoints and native history reconciliation; watchdog exited zero without forced cleanup. Fresh nine-hour run `nine-hour-20261019-015904` started at 01:59 Asia/Shanghai, expected to finish at 10:59, with cleanup deadline around 11:14. Its four frozen harness hashes match the passing smoke. Final long-run outcome remains pending. Monitoring is active every 15 minutes; no new starts are authorized after 09:00.
