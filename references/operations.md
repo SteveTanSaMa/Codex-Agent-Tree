@@ -201,4 +201,6 @@ This is available only after native execution is settled and no host command is 
 
 Managed `agent_status`, `agent_list` and control responses use tool contract v2: message bodies, assignment text and Attempt input previews are omitted. Formally delivered input supplies message content. Operator diagnostics retain previews. Existing Thread history is not redacted by this change.
 
+Managed Attempt results are previews capped at 2,000 characters with `resultTruncated`; operator status retains the original result. Budget diagnostics list at most 100 unknown-usage Attempt IDs, with the full `unknownUsageAttemptCount` and `unknownUsageTruncated` flag. Liability and admission still use the complete accounting state; the preview limit does not settle or discard unknown costs. Retained events provide the complete Attempt trace.
+
 范围替换为操作者专用：使用当前代际和固定 key 提交，旧队列被撤销，旧执行先中断/对账，新工作随后准入。子节点等待新分配，人工暂停、永久终止、历史计数和未知用量均不重置。`ready` 表示排空完成，不表示业务任务完成；`reviewed-unknown` 只是人工确认已检查未知命令，不是成功收据，也不允许重放。

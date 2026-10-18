@@ -894,9 +894,15 @@ export class Store {
       treeId,
     )!;
     const unknown = this.all(
-      "SELECT t.id FROM turn_attempts t JOIN agents a ON a.id=t.agent_id WHERE a.tree_id=? AND t.state IN ('completed','failed','interrupted') AND t.reserved>0",
+      "SELECT t.id FROM turn_attempts t JOIN agents a ON a.id=t.agent_id WHERE a.tree_id=? AND t.state IN ('completed','failed','interrupted') AND t.reserved>0 ORDER BY t.created_at,t.id LIMIT 100",
       treeId,
     ).map((a) => String(a.id));
+    const unknownUsageAttemptCount = Number(
+      this.one(
+        "SELECT COUNT(*) AS n FROM turn_attempts t JOIN agents a ON a.id=t.agent_id WHERE a.tree_id=? AND t.state IN ('completed','failed','interrupted') AND t.reserved>0",
+        treeId,
+      )!.n,
+    );
     const tokens = this.limits(treeId).tokens;
     const observedTokens = Number(
       this.one(
@@ -934,6 +940,8 @@ export class Store {
         ? Math.max(0, spent + reserved - tokens)
         : 0,
       unknownUsageAttempts: unknown,
+      unknownUsageAttemptCount,
+      unknownUsageTruncated: unknownUsageAttemptCount > unknown.length,
     };
   }
   executionStatus(treeId: string) {

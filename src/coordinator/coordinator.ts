@@ -1057,7 +1057,11 @@ export class Coordinator {
       toolContractVersion: 2,
       messages: status.messages.map(({ body: _body, ...metadata }) => metadata),
       attempts: status.attempts.map(
-        ({ inputSummary: _input, ...metadata }) => metadata,
+        ({ inputSummary: _input, result, ...metadata }) => ({
+          ...metadata,
+          result: result?.slice(0, 2000) ?? null,
+          resultTruncated: (result?.length ?? 0) > 2000,
+        }),
       ),
     };
   }

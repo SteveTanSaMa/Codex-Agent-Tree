@@ -189,6 +189,12 @@ test("managed status/list/control omit queued bodies; operator diagnostics retai
       rootSettings({}).limits,
     );
     await until(() => runtime.starts.length === 1);
+    const running = c.store.activeAttempt(root.id)!;
+    c.store.updateResult(
+      running.id,
+      running.binding_generation,
+      "Z".repeat(60000),
+    );
     c.store.operatorSend(root.id, "private-input", "QUEUED_SECRET_BODY");
     assert.match(JSON.stringify(c.status(root.id)), /QUEUED_SECRET_BODY/);
     for (const [tool, args] of [
@@ -212,12 +218,20 @@ test("managed status/list/control omit queued bodies; operator diagnostics retai
       await until(() => runtime.responses.length > count);
       assert.doesNotMatch(
         JSON.stringify(runtime.responses.at(-1)),
-        /QUEUED_SECRET_BODY/,
+        /QUEUED_SECRET_BODY|PRIVATE_ASSIGNMENT/,
       );
       assert.match(
         JSON.stringify(runtime.responses.at(-1)),
         /toolContractVersion/,
       );
+      const reply = runtime.responses.at(-1) as {
+        contentItems: { text: string }[];
+      };
+      const value = JSON.parse(reply.contentItems[0]!.text);
+      for (const status of Array.isArray(value) ? value : [value]) {
+        assert.equal(status.attempts[0].result.length, 2000);
+        assert.equal(status.attempts[0].resultTruncated, true);
+      }
     }
   } finally {
     await c.stop();

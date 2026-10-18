@@ -106,7 +106,7 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
     }
     db.prepare("UPDATE agents SET turns=50 WHERE id=?").run(root.id);
     const insert = db.prepare(
-      "INSERT INTO turn_attempts(id,agent_id,thread_id,binding_generation,owner_generation,state,input,trace_id,reserved,observed,result,created_at) VALUES(?,?,?,1,1,'completed',?,'fixture',0,0,'done',?)",
+      "INSERT INTO turn_attempts(id,agent_id,thread_id,binding_generation,owner_generation,state,input,trace_id,reserved,observed,result,created_at) VALUES(?,?,?,1,1,'completed',?,'fixture',1,NULL,'done',?)",
     );
     const msg = db.prepare(
       "INSERT INTO operator_messages(id,recipient_id,input_key,body,status,created_at) VALUES(?,?,?,?,'processed',?)",
@@ -121,7 +121,7 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
         new Date(n).toISOString(),
       );
     db.exec(
-      "INSERT INTO attempt_accounting(attempt_id,charged,finalized) SELECT id,0,1 FROM turn_attempts",
+      "INSERT INTO attempt_accounting(attempt_id,charged,finalized) SELECT id,0,0 FROM turn_attempts",
     );
     for (let n = 0; n < 10000; n++)
       msg.run(
@@ -132,6 +132,9 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
         new Date(n).toISOString(),
       );
     db.exec("COMMIT");
+    db.prepare("UPDATE agents SET reserved=50 WHERE tree_id=?").run(
+      root.tree_id,
+    );
     const oldAttempts = c.store.attempts.bind(c.store),
       oldMessages = c.store.messages.bind(c.store);
     c.store.attempts = (id, limit) => {
@@ -147,6 +150,9 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
     assert.equal(status.attempts.length, 20);
     assert.equal(status.messageCount, 500);
     assert.equal(status.messages.length, 50);
+    assert.equal(status.budget.unknownUsageAttemptCount, 1000);
+    assert.equal(status.budget.unknownUsageAttempts.length, 100);
+    assert.equal(status.budget.unknownUsageTruncated, true);
     const view = c.view(root.id);
     assert.equal(view.agents.length, 20);
     assert.equal(
