@@ -186,7 +186,7 @@ export class CodexRuntime {
       `codex-cli ${protocolString(lifecycle.managedCodexVersion)}` ===
         version && lifecycle.appServerVersion === lifecycle.managedCodexVersion,
       "CONFLICT",
-      "Launcher and running daemon differ; reconcile existing native work before switching binaries",
+      "Launcher and running daemon differ; reconcile native work and explicitly update the dedicated daemon package from the selected CLI before restarting",
     );
     requireCondition(
       lifecycle.pid === undefined ||

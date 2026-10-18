@@ -11,7 +11,7 @@ async function gate(p: () => boolean) {
   assert.ok(p());
 }
 for (const delay of [0, 40, 120])
-  test(`serial scheduler qualification: first metadata RPC held ${delay} ms, no duplicate dispatch`, async () => {
+  test(`incremental scheduler qualification: first metadata RPC held ${delay} ms, no duplicate dispatch`, async () => {
     const dir = mkdtempSync("/tmp/cat-rpc-latency-"),
       runtime = new ControlledRuntime();
     const read = runtime.readThread.bind(runtime);
@@ -50,12 +50,9 @@ for (const delay of [0, 40, 120])
       await gate(() => entered);
       const waiting = performance.now();
       c.createRoot("B", "second", limits);
+      await gate(() => runtime.starts.length === 1);
       await new Promise<void>((r) => setTimeout(r, delay));
-      assert.equal(
-        runtime.starts.length,
-        0,
-        "Later Agent bypassed serial metadata barrier",
-      );
+      assert.equal(runtime.starts[0]!.threadId, "thread-2");
       release();
       await gate(() => runtime.starts.length === 2);
       assert.ok(performance.now() - waiting >= Math.max(0, delay - 2));

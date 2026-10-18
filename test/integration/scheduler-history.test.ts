@@ -171,7 +171,7 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
   }
 });
 
-test("new arrivals during a held preflight are retained and dispatch on the next wave", async () => {
+test("new arrivals bypass a held preflight without starting the same Agent twice", async () => {
   const dir = mkdtempSync("/tmp/cat-wave-arrival-");
   let release!: () => void;
   const gate = new Promise<void>((r) => {
@@ -210,21 +210,116 @@ test("new arrivals during a held preflight are retained and dispatch on the next
       rootSettings({ concurrent: 1 }).limits,
     );
     const arrived = performance.now();
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal(
-      c.store.attempts(arrival.id).length,
-      0,
-      "current wave deliberately retains its snapshot",
-    );
+    await until(() => c.store.attempts(arrival.id).length === 1, 500);
+    assert.equal(runtime.starts.length, 1);
+    assert.ok(performance.now() - arrived < 500);
     release();
     await starting;
     await until(() => runtime.starts.length === 2);
     assert.equal(c.store.attempts(arrival.id).length, 1);
-    assert.ok(performance.now() - arrived >= 100);
+
     assert.equal(new Set(runtime.starts.map((t) => t.attemptId)).size, 2);
   } finally {
     release();
     await starting;
+    await c.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saturated preflights admit new work after one slot frees, bound overlap to three and serialize each Agent", async () => {
+  const dir = mkdtempSync("/tmp/cat-scheduler-slots-");
+  const releases: (() => void)[] = [];
+  const gates = Array.from(
+    { length: 3 },
+    () => new Promise<void>((r) => releases.push(r)),
+  );
+  const pending = new Set<string>();
+  let peak = 0;
+  class Runtime extends ControlledRuntime {
+    override async readThread(id: string) {
+      assert.ok(!pending.has(id), "same Agent has overlapping preflight RPCs");
+      pending.add(id);
+      peak = Math.max(peak, pending.size);
+      try {
+        const n = Number(id.slice(7)) - 1;
+        if (n < 3) await gates[n];
+        return await super.readThread(id);
+      } finally {
+        pending.delete(id);
+      }
+    }
+  }
+  const runtime = new Runtime();
+  const c = new Coordinator(
+    { stateDirectory: dir, runtimeHome: join(dir, "h") },
+    runtime,
+  );
+  try {
+    await c.start();
+    for (let n = 0; n < 3; n++)
+      c.createRoot(`Held${n}`, "work", rootSettings({ concurrent: 1 }).limits);
+    await until(() => pending.size === 3);
+    for (let n = 3; n < 20; n++)
+      c.createRoot(
+        `Arrival${n}`,
+        "work",
+        rootSettings({ concurrent: 1 }).limits,
+      );
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(runtime.starts.length, 0);
+    releases[2]!();
+    await until(() => runtime.starts.length === 18);
+    assert.equal(pending.size, 2, "remaining held RPCs must stay pending");
+    assert.equal(peak, 3);
+    releases[0]!();
+    releases[1]!();
+    await until(() => runtime.starts.length === 20);
+    assert.equal(new Set(runtime.starts.map((t) => t.threadId)).size, 20);
+    assert.equal(new Set(runtime.starts.map((t) => t.attemptId)).size, 20);
+  } finally {
+    for (const release of releases) release();
+    await c.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shutdown discards queued dispatch and a metadata response arriving after stop cannot prepare a Turn", async () => {
+  const dir = mkdtempSync("/tmp/cat-scheduler-stop-");
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let held = false;
+  class Runtime extends ControlledRuntime {
+    override async readThread(id: string) {
+      held = true;
+      await gate;
+      return super.readThread(id);
+    }
+  }
+  const runtime = new Runtime();
+  const c = new Coordinator(
+    { stateDirectory: dir, runtimeHome: join(dir, "h") },
+    runtime,
+  );
+  let preparations = 0;
+  const prepare = c.store.prepare.bind(c.store);
+  c.store.prepare = (...args) => {
+    preparations++;
+    return prepare(...args);
+  };
+  try {
+    await c.start();
+    c.createRoot("Held", "work", rootSettings({}).limits);
+    await until(() => held);
+    const stopping = c.stop();
+    release();
+    await stopping;
+    assert.equal(preparations, 0);
+    assert.equal(runtime.starts.length, 0);
+  } finally {
+    release();
     await c.stop();
     rmSync(dir, { recursive: true, force: true });
   }

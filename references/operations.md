@@ -1,6 +1,6 @@
 # Team operations
 
-All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state DIR`. Default state: `~/.cat/team`. Use dedicated short paths because macOS Unix sockets are length-limited. Current main uses capability-based CLI admission, with no exact release pin. Versions and protocol fingerprints are diagnostic evidence; missing required capabilities block startup. Published Beta 2 retains its historical pin.
+All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state DIR`. Default state: `~/.cat/team`. Use dedicated short paths because macOS Unix sockets are length-limited. Beta 3 uses capability-based CLI admission, with no exact release pin. Versions and protocol fingerprints are diagnostic evidence; missing required capabilities block startup. Published Beta 2 retains its historical pin.
 
 For repository coding, initialize a new opt-in workspace using [coding operations](coding.md). Existing text-only teams keep their permissions.
 
@@ -113,9 +113,21 @@ The coding runtime targets macOS arm64, Node ≥26.3.1 and one credential domain
 
 ## Usage evidence reconciliation
 
-Current main upgrades to schema 13, adding durable work-scope epochs and replacement receipts alongside an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
+Beta 3 upgrades to schema 13, adding durable work-scope epochs and replacement receipts alongside an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
 Stop and back up the complete state before upgrading. Beta 2 and older source refuse schema 13. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+
+## Changing the Codex executable
+
+Changing `config.json.executable` does not replace the package retained by the official managed daemon. A compatible launcher can pass `doctor` while `start` refuses a different running/managed package. Do not bypass that check or run an updater automatically on a startup failure.
+
+When the operator explicitly selects a new executable: pause the whole tree, interrupt or drain accepted work, and inspect native history plus unknown command/guidance receipts. Stop the Coordinator and back up complete state and runtime home after all native Turns are terminal. Then explicitly update **only the dedicated runtime home's** package from the selected CLI:
+
+```sh
+CODEX_HOME="$RUNTIME" "$SELECTED_CODEX" app-server daemon update --from-cli --yes
+```
+
+For environment-backed providers, make the existing selected credential available to that command without printing it. For Keychain-backed providers, use an authenticated credential-loading launcher; do not start the new daemon without its configured secret. Update the team's executable path, rerun `doctor --state "$STATE"`, and start/reconcile the same state. Preserve the old paused state until identity, history and queues are checked. If evidence remains unknown, retain it for review instead of replaying work. A rollback requires the matching stopped backup and reconciliation of any intervening native effects.
 
 ## Third-party provider configuration
 
@@ -174,7 +186,7 @@ Schema 13 is one-way. Rollback requires the matching old source and pre-upgrade 
 
 ## Scope replacement
 
-Development after Beta 2 adds operator-only subtree replacement (schema 13). The published Beta 2 ZIP does not contain this command. Ordinary `steer` changes current input; pause drains and retains queues. Neither automatically retracts descendant assignments.
+Beta 3 adds operator-only subtree replacement (schema 13). The published Beta 2 ZIP does not contain this command. Ordinary `steer` changes current input; pause drains and retains queues. Neither automatically retracts descendant assignments.
 
 Read `status.workScope.generation`, then submit a replacement with that exact generation and a stable key:
 

@@ -130,7 +130,10 @@ export class Coordinator {
   readonly store: Store;
   readonly runtime: RuntimePort;
   readonly workspace: WorkspaceBroker | undefined;
-  private tickRequested = false;
+  private scheduleQueue = new Map<string, Agent>();
+  private scheduling = new Set<string>();
+  private scheduleDrain: Promise<void> | undefined;
+  private resolveScheduleDrain: (() => void) | undefined;
   private requestedInterrupts = new Set<string>();
   private ticking = false;
   private reconciliation: Promise<void> | undefined;
@@ -460,31 +463,45 @@ export class Coordinator {
   private async tick() {
     if (!this.ready || this.stopping) return;
     await this.checkProtections();
-    this.tickRequested = true;
-    if (this.ticking) return;
-    this.ticking = true;
-    try {
-      do {
-        this.tickRequested = false;
-        this.store.scopes.advance();
-        const queue = this.store.agents();
-        let next = 0;
-        const worker = async () => {
-          while (next < queue.length && this.ready && !this.stopping) {
-            const agent = queue[next++]!;
-            await this.scheduleAgent(agent);
-          }
-        };
-        // Only independent preflight RPCs overlap. Store.prepare/markStarting
-        // still serialize admission and validate the current scope at dispatch.
-        const results = await Promise.allSettled(
-          Array.from({ length: Math.min(3, queue.length) }, worker),
-        );
-        for (const result of results)
-          if (result.status === "rejected") this.recordError(result.reason);
-      } while (this.tickRequested && this.ready && !this.stopping);
-    } finally {
+    if (!this.ready || this.stopping) return;
+    this.store.scopes.advance();
+    // A request while an Agent is in flight retains one follow-up check. Never
+    // overlap preflights for the same Agent, even before its Attempt is prepared.
+    for (const agent of this.store.agents())
+      this.scheduleQueue.set(agent.id, agent);
+    const alreadyTicking = this.ticking;
+    if (!this.ticking) {
+      this.ticking = true;
+      this.scheduleDrain = new Promise<void>((resolve) => {
+        this.resolveScheduleDrain = resolve;
+      });
+    }
+    const drain = this.scheduleDrain;
+    this.pumpSchedule();
+    // Reentrant events must not wait for their own pending dispatch. The owner
+    // still awaits drain for startup/control consistency and bounded shutdown.
+    if (!alreadyTicking) await drain;
+  }
+  private pumpSchedule() {
+    if (!this.ready || this.stopping) this.scheduleQueue.clear();
+    for (const [id, agent] of this.scheduleQueue) {
+      if (this.scheduling.size >= 3) break;
+      if (this.scheduling.has(id)) continue;
+      this.scheduleQueue.delete(id);
+      this.scheduling.add(id);
+      void this.scheduleAgent(agent)
+        .catch((error) => this.recordError(error))
+        .finally(() => {
+          this.scheduling.delete(id);
+          this.pumpSchedule();
+        });
+    }
+    if (this.scheduling.size === 0 && this.scheduleQueue.size === 0) {
       this.ticking = false;
+      const resolve = this.resolveScheduleDrain;
+      this.resolveScheduleDrain = undefined;
+      this.scheduleDrain = undefined;
+      resolve?.();
     }
   }
   private async scheduleAgent(snapshot: Agent) {
@@ -535,6 +552,7 @@ export class Coordinator {
       const native = record(
         (await this.runtime.readThread(binding.thread_id, false)).thread,
       );
+      if (this.stopping || !this.ready) return;
       const nativeStatus = record(native.status);
       this.store.observeSession(agent.id, nativeStatus);
       if (
