@@ -28,7 +28,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:unit
       - if: runner.os != 'Windows'
-        run: node --test test/integration/work-scopes.test.ts test/integration/task-board.test.ts test/integration/scheduler-history.test.ts test/fault/storage-admission.test.ts
+        run: node --test test/integration/work-scopes.test.ts test/integration/task-board.test.ts test/integration/scheduler-history.test.ts test/fault/storage-admission.test.ts test/fault/wal-backup.test.ts
       - if: runner.os == 'macOS'
         run: npm test
       - if: runner.os == 'macOS'

@@ -55,6 +55,23 @@ for (const [label, change, message] of [
     /threadId:string/,
   ],
   [
+    "incompatible history enum",
+    (s: any) => {
+      s["v2/ThreadStartParams"].properties.historyMode = {
+        type: "string",
+        enum: ["future-only"],
+      };
+    },
+    /adapter-payload/,
+  ],
+  [
+    "incompatible input type",
+    (s: any) => {
+      s["v2/TurnStartParams"].properties.input = { type: "string" };
+    },
+    /adapter-payload/,
+  ],
+  [
     "missing steer method",
     (s: any) => {
       s.ClientRequest.oneOf = s.ClientRequest.oneOf.filter(

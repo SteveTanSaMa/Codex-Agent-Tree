@@ -695,3 +695,134 @@ test("Coordinator binds native Thread to selected primary cwd and exposes author
     f.close();
   }
 });
+
+test("Lead detects conflicting sibling patches and stale dependency handoff, then recovers partial multi-repository integration", async () => {
+  const f = fixture();
+  try {
+    const a = f.child(f.actor, "Left", { repositoryIds: ["app", "dxmt"] });
+    const b = f.child(f.actor, "Right", { repositoryId: "app" });
+    const reviewer = f.child(f.activate(a), "Review", {
+      repositoryIds: ["app", "dxmt"],
+    });
+    let broker = f.broker;
+    const read = async (agent: Agent, repositoryId: string) =>
+      (await broker.call(agent, "read_file", {
+        repositoryId,
+        path: "value.txt",
+      })) as { hash: string; content: string };
+    const write = async (
+      agent: Agent,
+      repositoryId: string,
+      content: string,
+      hash: string,
+    ) =>
+      broker.call(agent, "write_file", {
+        repositoryId,
+        path: "value.txt",
+        content,
+        expectedHash: hash,
+      });
+    const originalApp = await read(f.root, "app"),
+      originalDependency = await read(f.root, "dxmt");
+    const leftBase = await read(a, "app"),
+      rightBase = await read(b, "app"),
+      dependencyBase = await read(a, "dxmt");
+    await write(a, "app", "left", leftBase.hash);
+    await write(b, "app", "right", rightBase.hash);
+    await write(a, "dxmt", "right", dependencyBase.hash);
+    assert.equal((await read(reviewer, "dxmt")).content, "right");
+    await assert.rejects(
+      () => write(reviewer, "app", "forbidden", leftBase.hash),
+      /read-only/,
+    );
+    const appDiff = (await broker.call(a, "git_diff", {
+      repositoryId: "app",
+    })) as { baseCommit: string; diff: string };
+    const competing = (await broker.call(b, "git_diff", {
+      repositoryId: "app",
+    })) as { diff: string };
+    assert.equal(appDiff.baseCommit, f.policy.repositories!.app!.baseCommit);
+    assert.match(appDiff.diff, /left/);
+    await write(f.root, "app", "left", originalApp.hash);
+    await assert.rejects(
+      () => write(f.root, "app", "right", originalApp.hash),
+      /hash|changed|conflict/i,
+    );
+    await broker.call(f.root, "write_file", {
+      repositoryId: "app",
+      path: "conflict.patch",
+      content: competing.diff,
+      expectedHash: null,
+    });
+    const conflict = (await broker.call(f.root, "terminal", {
+      repositoryId: "app",
+      command: "git apply --check conflict.patch",
+    })) as { exitCode: number };
+    assert.notEqual(conflict.exitCode, 0);
+    assert.equal((await read(f.root, "app")).content, "left");
+    await write(f.root, "dxmt", "upstream", originalDependency.hash);
+    const upstream = (await broker.call(f.root, "terminal", {
+      repositoryId: "dxmt",
+      command:
+        "git add value.txt && git commit -m 'upstream fixture' && git rev-parse HEAD",
+    })) as { exitCode: number; output: string };
+    assert.equal(upstream.exitCode, 0);
+    assert.equal(
+      (await read(a, "dxmt")).content,
+      "right",
+      "worktree must not silently follow upstream",
+    );
+    await assert.rejects(
+      () => write(f.root, "dxmt", "right", originalDependency.hash),
+      /hash|changed|conflict/i,
+    );
+    const task = f.store.tasks.create(f.actor, f.root.id, {
+      requestKey: "integration",
+      subject: "Integrate both repositories",
+      description: "Require actual cross-repository golden",
+    });
+    const claimed = f.store.tasks.update(f.actor, f.root.id, {
+      requestKey: "claim",
+      taskId: task.id,
+      expectedRevision: task.revision,
+      action: "claim",
+    });
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    const golden = `const fs=require('node:fs');require('node:assert/strict').deepEqual([fs.readFileSync(${JSON.stringify(join(f.roots.app!, "value.txt"))},'utf8'),fs.readFileSync(${JSON.stringify(join(f.roots.dxmt!, "value.txt"))},'utf8')],['left','right']);console.log('MULTIREPO_RECOVERY_OK')`;
+    const command = quote(process.execPath) + " -e " + quote(golden);
+    const partial = (await broker.call(f.root, "terminal", {
+      repositoryId: "app",
+      command,
+    })) as { exitCode: number };
+    assert.notEqual(partial.exitCode, 0);
+    assert.equal(
+      f.store.tasks.get(null, f.root.id, task.id).status,
+      "in_progress",
+    );
+    broker = f.restart();
+    assert.equal((await read(f.root, "app")).content, "left");
+    assert.equal((await read(f.root, "dxmt")).content, "upstream");
+    const reviewedDependency = await read(f.root, "dxmt");
+    await write(f.root, "dxmt", "right", reviewedDependency.hash);
+    const final = (await broker.call(f.root, "terminal", {
+      repositoryId: "app",
+      command,
+    })) as { exitCode: number; output: string };
+    assert.equal(final.exitCode, 0);
+    assert.match(final.output, /MULTIREPO_RECOVERY_OK/);
+    const completed = f.store.tasks.update(f.actor, f.root.id, {
+      requestKey: "complete",
+      taskId: task.id,
+      expectedRevision: claimed.revision,
+      action: "complete",
+      result: JSON.stringify({
+        appBase: appDiff.baseCommit,
+        dependencyHead: upstream.output.trim().split("\n").at(-1),
+        golden: final.output,
+      }),
+    });
+    assert.equal(completed.status, "completed");
+  } finally {
+    f.close();
+  }
+});

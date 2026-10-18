@@ -42,6 +42,48 @@ const inputs: Record<string, string[]> = {
   "v2/TurnInterruptParams": ["threadId", "turnId"],
   DynamicToolCallResponse: ["success", "contentItems"],
 };
+const textInput = [{ type: "text", text: "fixture" }];
+const samples: Record<string, Record<string, unknown>> = {
+  "v1/InitializeParams": {
+    clientInfo: { name: "codex_agent_tree", version: "0.0.1" },
+    capabilities: { experimentalApi: true },
+  },
+  "v2/ThreadStartParams": {
+    cwd: "/tmp",
+    sandbox: "read-only",
+    approvalPolicy: "untrusted",
+    ephemeral: false,
+    historyMode: "legacy",
+    dynamicTools: [
+      {
+        type: "function",
+        name: "fixture",
+        description: "fixture",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ],
+    developerInstructions: "fixture",
+    config: {
+      "features.multi_agent": false,
+      "features.shell_tool": false,
+      "features.unified_exec": false,
+    },
+  },
+  "v2/ThreadResumeParams": { threadId: "fixture", cwd: "/tmp" },
+  "v2/ThreadReadParams": { threadId: "fixture", includeTurns: true },
+  "v2/TurnStartParams": { threadId: "fixture", input: textInput },
+  "v2/TurnSteerParams": {
+    threadId: "fixture",
+    expectedTurnId: "fixture",
+    input: textInput,
+    clientUserMessageId: "fixture",
+  },
+  "v2/TurnInterruptParams": { threadId: "fixture", turnId: "fixture" },
+  DynamicToolCallResponse: {
+    success: true,
+    contentItems: [{ type: "inputText", text: "fixture" }],
+  },
+};
 const outputs: Record<string, string[]> = {
   "v2/ThreadStartResponse": ["thread"],
   "v2/ThreadReadResponse": ["thread"],
@@ -101,6 +143,51 @@ export function inspectSchemas(schemas: Record<string, Schema>): string[] {
     if (type) need(resolve(p, doc).type === type, `type:${name}:${type}`);
     return p;
   };
+  // Narrow structural checks for the payloads this adapter actually sends.
+  // Runtime response validation and behavior tests remain independent evidence.
+  const fits = (value: any, raw: any, doc: Schema, depth = 0): boolean => {
+    if (raw === true) return true;
+    if (!raw || depth > 32) return false;
+    const node = resolve(raw, doc);
+    for (const union of [node.oneOf, node.anyOf])
+      if (union && !union.some((s: Schema) => fits(value, s, doc, depth + 1)))
+        return false;
+    if (
+      node.enum &&
+      !node.enum.some(
+        (x: unknown) => JSON.stringify(x) === JSON.stringify(value),
+      )
+    )
+      return false;
+    const type =
+      value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+    if (
+      node.type &&
+      !(Array.isArray(node.type) ? node.type : [node.type]).some(
+        (t: string) =>
+          t === type || (t === "integer" && Number.isInteger(value)),
+      )
+    )
+      return false;
+    if (type === "object") {
+      if ((node.required ?? []).some((key: string) => !(key in value)))
+        return false;
+      for (const [key, item] of Object.entries(value)) {
+        const prop = node.properties?.[key];
+        if (prop === undefined && node.additionalProperties === false)
+          return false;
+        if (prop !== undefined && !fits(item, prop, doc, depth + 1))
+          return false;
+      }
+    }
+    if (
+      type === "array" &&
+      node.items &&
+      !value.every((v: unknown) => fits(v, node.items, doc, depth + 1))
+    )
+      return false;
+    return true;
+  };
   for (const [name, sent] of Object.entries(inputs)) {
     const doc = root(name);
     for (const field of sent) property(doc, doc, field);
@@ -108,6 +195,7 @@ export function inspectSchemas(schemas: Record<string, Schema>): string[] {
       (doc.required ?? []).every((field: string) => sent.includes(field)),
       `no-unsupplied-required-input:${name}`,
     );
+    need(fits(samples[name], doc, doc), `adapter-payload:${name}`);
   }
   for (const [name, fields] of Object.entries(outputs)) {
     const doc = root(name);

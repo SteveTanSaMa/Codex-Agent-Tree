@@ -119,7 +119,7 @@ export class CodexRuntime {
     if (options.credential) validateCredential(options.credential);
     this.options = options;
   }
-  private async command(args: string[]): Promise<string> {
+  protected async command(args: string[]): Promise<string> {
     const credential = this.options.credential;
     const env = runtimeEnvironment(
       this.options.home,

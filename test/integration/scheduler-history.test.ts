@@ -170,3 +170,62 @@ test("status and view page 1000 historical Turns and 10000 messages without mate
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("new arrivals during a held preflight are retained and dispatch on the next wave", async () => {
+  const dir = mkdtempSync("/tmp/cat-wave-arrival-");
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let held = false;
+  class Runtime extends ControlledRuntime {
+    override async readThread(id: string) {
+      if (id === "thread-1") {
+        held = true;
+        await gate;
+      }
+      return super.readThread(id);
+    }
+  }
+  const runtime = new Runtime();
+  const c = new Coordinator(
+    { stateDirectory: dir, runtimeHome: join(dir, "h") },
+    runtime,
+  );
+  let starting: Promise<void> | undefined;
+  try {
+    const root = c.store.createRoot(
+      "Held",
+      "work",
+      rootSettings({ concurrent: 1 }).limits,
+    );
+    c.store.bind(root.id, "thread-1", "fixture");
+    runtime.threads = 1;
+    c.store.prepare(root.id, "work");
+    starting = c.start();
+    await until(() => held);
+    const arrival = c.createRoot(
+      "Arrival",
+      "work",
+      rootSettings({ concurrent: 1 }).limits,
+    );
+    const arrived = performance.now();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      c.store.attempts(arrival.id).length,
+      0,
+      "current wave deliberately retains its snapshot",
+    );
+    release();
+    await starting;
+    await until(() => runtime.starts.length === 2);
+    assert.equal(c.store.attempts(arrival.id).length, 1);
+    assert.ok(performance.now() - arrived >= 100);
+    assert.equal(new Set(runtime.starts.map((t) => t.attemptId)).size, 2);
+  } finally {
+    release();
+    await starting;
+    await c.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
