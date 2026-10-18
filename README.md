@@ -12,6 +12,8 @@ Beta 限定于可信本地仓库和上述环境；不承诺生产级安全隔离
 
 Beta 2 包含多仓库与多 worktree、执行中引导、可配置用量提醒，以及 Beta 1 审查后的 Task 投影优化和工作树恢复说明。已发布 Beta 1 ZIP 保持不变。见[Beta 2 验收](docs/beta-2-validation.md)、[多仓库设计与验证](docs/multi-repository-plan.md)和[审查跟进](docs/review-beta-1.md)。
 
+发布后的[独立补验成果](docs/beta-2-gap-test-results.md)已收录，原 Beta 2 安装包保持不变。[后续计划与验收目标](docs/post-beta-2-plan.md)涵盖范围变更、恢复、跨环境/跨版本兼容性和规模验证；这些后续能力尚未实施。
+
 多仓库团队使用 `init --workspace-config /absolute/path/workspaces.json`，登记每个独立 Git 根目录；上层目录无需有 `.git`。每个二级 Agent 可获得一个或多个仓库，在 `state/workspaces/AGENT_ID/仓库目录名` 中分别创建独立 worktree，保留 MiPlay App / DXMT / LSFG 的相邻布局。三级默认只读继承父工作树，也可创建独立只读 worktree。仓库授权只能缩小；Lead 按仓库审核和集成。[配置示例和工具用法](references/coding.md#multiple-repositories)。
 
 ## 安装
