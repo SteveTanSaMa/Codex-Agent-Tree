@@ -1,6 +1,6 @@
 # Codex Agent Tree
 
-> This README describes development on main; published packages contain the features of their matching tags.
+> This README describes development on main; published packages contain the features of their matching tags. Post-Beta-2 main uses schema 13 with scope replacement and tool status projection v2; these changes are unreleased.
 
 [简体中文](README.md) · English
 
@@ -12,7 +12,7 @@ This Beta targets trusted local repositories in the qualified environment. It do
 
 Beta 2 includes multiple repositories and worktrees, live guidance, configurable usage reminders, post-Beta-1 task projection improvements and worktree recovery guidance. The published Beta 1 ZIP remains unchanged. See [Beta 2 qualification](docs/beta-2-validation.md), the [multi-repository design and validation](docs/multi-repository-plan.md) and [review follow-up](docs/review-beta-1.md).
 
-The [independent follow-up qualification](docs/beta-2-gap-test-results.md) is now collected; the published Beta 2 payload remains unchanged. The [next plan and acceptance goals](docs/post-beta-2-plan.md) cover scope changes, recovery, cross-environment/version compatibility and scale qualification. These planned improvements are not implemented yet.
+The [independent follow-up qualification](docs/beta-2-gap-test-results.md) is now collected; the published Beta 2 payload remains unchanged. The [next plan and acceptance goals](docs/post-beta-2-plan.md) cover scope changes, recovery, cross-environment/version compatibility and scale qualification. See the [execution record](docs/post-beta-2-progress.md) for implementation status and remaining qualification; new capabilities are unreleased.
 
 Use `init --workspace-config /absolute/path/workspaces.json` to register independent Git roots; their parent directory does not need Git. A secondary may receive one or more repositories, each in `state/workspaces/AGENT_ID/REPOSITORY_DIRECTORY`, preserving sibling layouts such as MiPlay App / DXMT / LSFG. Deeper Agents inherit their parent's worktrees read-only by default or create isolated read-only worktrees. Repository grants only narrow; Lead reviews and integrates each repository separately. See [configuration and tool examples](references/coding.md#multiple-repositories).
 

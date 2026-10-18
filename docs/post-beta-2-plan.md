@@ -1,6 +1,6 @@
 # Post-Beta-2 plan and acceptance goals / Beta 2 后续计划与验收目标
 
-日期：2026-10-18。状态：**仅设计，尚未实施或执行本页新增验证**。生产基线为 `v0.1.0-beta.2`（`2c9a29f`，schema 12）；[补验成果](beta-2-gap-test-results.md)单独收录，不改变已发布安装包。本页的目标数值是未来验收条件，不是当前性能或兼容性保证。
+日期：2026-10-18。状态：**已开始实施，尚未完成全部阶段**。发布基线为 `v0.1.0-beta.2`（`2c9a29f`，schema 12）；开发中的 schema 13 和阶段性验证见[执行记录](post-beta-2-progress.md)。[补验成果](beta-2-gap-test-results.md)单独收录，不改变已发布安装包。本页的目标数值是验收条件，不是所有目标均已实现或兼容性均已通过的声明。
 
 ## 1. 目标与顺序
 
@@ -116,7 +116,7 @@
 
 ## English summary
 
-**Design only; follow-up implementation and new qualification runs have not started.** The published Beta 2 payload remains unchanged. Collected follow-up evidence is separate from release-time results.
+**Implementation has started; the full plan is not complete.** See the [execution record](post-beta-2-progress.md) for implemented behavior, bounded evidence and remaining work. The published Beta 2 payload remains unchanged. Collected follow-up evidence is separate from release-time results.
 
 The proposed order is: auditable subtree scope replacement and queued-content projection; execution/receipt/native recovery fault windows; compatibility qualification; bounded scheduling, history queries and multi-repository handoffs; release review. Existing steering and pause semantics remain explicit. Accepted external side effects cannot be rolled back, and ambiguous execution must not be automatically replayed.
 
