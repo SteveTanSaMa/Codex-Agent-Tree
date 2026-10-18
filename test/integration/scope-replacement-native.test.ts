@@ -114,7 +114,12 @@ for (const candidate of [false, true])
           await new Promise<void>((r) => server.close(() => r()));
           if (previous === undefined) delete process.env.CAT_SCOPE_FIXTURE_KEY;
           else process.env.CAT_SCOPE_FIXTURE_KEY = previous;
-          rmSync(dir, { recursive: true, force: true });
+          rmSync(dir, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 100,
+          });
         }
       }
     },

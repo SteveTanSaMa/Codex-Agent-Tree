@@ -1,6 +1,6 @@
 # Codex Agent Tree
 
-> 本文描述 main 开发版本；已发布安装包的功能以对应 tag 为准。Beta 2 之后的 main 使用 schema 13，新增范围替换和工具状态投影 v2，尚未发布。
+> 本文描述 main 开发版本；已发布安装包的功能以对应 tag 为准。Beta 2 之后的 main 使用 schema 13，新增范围替换、工具状态投影 v2，并以能力准入替代精确 CLI 版本锁，尚未发布。
 
 简体中文 · [English](README.en.md)
 

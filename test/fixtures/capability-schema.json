@@ -1,0 +1,727 @@
+{
+  "ClientRequest": {
+    "oneOf": [
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "initialize"
+            ],
+            "title": "InitializeRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "thread/start"
+            ],
+            "title": "Thread/startRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "thread/resume"
+            ],
+            "title": "Thread/resumeRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "thread/read"
+            ],
+            "title": "Thread/readRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "turn/start"
+            ],
+            "title": "Turn/startRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "turn/steer"
+            ],
+            "title": "Turn/steerRequestMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "turn/interrupt"
+            ],
+            "title": "Turn/interruptRequestMethod",
+            "type": "string"
+          }
+        }
+      }
+    ]
+  },
+  "ServerRequest": {
+    "oneOf": [
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "item/tool/call"
+            ],
+            "title": "Item/tool/callRequestMethod",
+            "type": "string"
+          }
+        }
+      }
+    ]
+  },
+  "ServerNotification": {
+    "oneOf": [
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "thread/tokenUsage/updated"
+            ],
+            "title": "Thread/tokenUsage/updatedNotificationMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "turn/started"
+            ],
+            "title": "Turn/startedNotificationMethod",
+            "type": "string"
+          }
+        }
+      },
+      {
+        "properties": {
+          "method": {
+            "enum": [
+              "turn/completed"
+            ],
+            "title": "Turn/completedNotificationMethod",
+            "type": "string"
+          }
+        }
+      }
+    ]
+  },
+  "v1/InitializeParams": {
+    "properties": {
+      "capabilities": true,
+      "clientInfo": true
+    },
+    "required": [
+      "clientInfo"
+    ]
+  },
+  "v2/ThreadStartParams": {
+    "properties": {
+      "allowProviderModelFallback": {
+        "type": "boolean"
+      },
+      "approvalPolicy": true,
+      "approvalsReviewer": true,
+      "baseInstructions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "config": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "cwd": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "daybreakEnabled": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "developerInstructions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "dynamicTools": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "environments": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "ephemeral": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "experimentalRawEvents": {
+        "type": "boolean"
+      },
+      "historyMode": true,
+      "mockExperimentalField": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "modelProvider": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "multiAgentMode": true,
+      "permissions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "personality": true,
+      "projectId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "runtimeWorkspaceRoots": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "sandbox": true,
+      "selectedCapabilityRoots": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "serviceName": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "serviceTier": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "sessionStartSource": true,
+      "threadSource": true
+    },
+    "required": []
+  },
+  "v2/ThreadResumeParams": {
+    "properties": {
+      "approvalPolicy": true,
+      "approvalsReviewer": true,
+      "baseInstructions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "config": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "cwd": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "developerInstructions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "excludeTurns": {
+        "type": "boolean"
+      },
+      "history": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "initialTurnsPage": true,
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "modelProvider": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "path": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "permissions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "personality": true,
+      "runtimeWorkspaceRoots": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "sandbox": true,
+      "serviceTier": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId"
+    ]
+  },
+  "v2/ThreadReadParams": {
+    "properties": {
+      "includeTurns": {
+        "type": "boolean"
+      },
+      "threadId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId"
+    ]
+  },
+  "v2/TurnStartParams": {
+    "properties": {
+      "additionalContext": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "approvalPolicy": true,
+      "approvalsReviewer": true,
+      "clientUserMessageId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "collaborationMode": true,
+      "cwd": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "cyberAccessProgram": true,
+      "disabledPluginIds": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "effort": true,
+      "environments": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "input": {
+        "type": "array"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "multiAgentMode": true,
+      "outputSchema": true,
+      "parentTurnId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "permissions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "personality": true,
+      "responsesapiClientMetadata": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "rootTurnId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "runtimeWorkspaceRoots": {
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "sandboxPolicy": true,
+      "serviceTier": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "serviceTierForTurn": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "summary": true,
+      "threadId": {
+        "type": "string"
+      },
+      "toolOutput": true,
+      "turnTrigger": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "input",
+      "threadId"
+    ]
+  },
+  "v2/TurnSteerParams": {
+    "properties": {
+      "additionalContext": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "clientUserMessageId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "expectedTurnId": {
+        "type": "string"
+      },
+      "input": {
+        "type": "array"
+      },
+      "responsesapiClientMetadata": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "expectedTurnId",
+      "input",
+      "threadId"
+    ]
+  },
+  "v2/TurnInterruptParams": {
+    "properties": {
+      "threadId": {
+        "type": "string"
+      },
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "turnId"
+    ]
+  },
+  "DynamicToolCallResponse": {
+    "properties": {
+      "contentItems": {
+        "type": "array"
+      },
+      "success": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "contentItems",
+      "success"
+    ]
+  },
+  "v2/ThreadStartResponse": {
+    "properties": {
+      "activePermissionProfile": true,
+      "approvalPolicy": true,
+      "approvalsReviewer": true,
+      "cwd": true,
+      "disabledPluginIds": {
+        "type": "array"
+      },
+      "instructionSources": {
+        "type": "array"
+      },
+      "model": {
+        "type": "string"
+      },
+      "modelProvider": {
+        "type": "string"
+      },
+      "multiAgentMode": true,
+      "reasoningEffort": true,
+      "runtimeWorkspaceRoots": {
+        "type": "array"
+      },
+      "sandbox": true,
+      "serviceTier": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "thread": true
+    },
+    "required": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread"
+    ]
+  },
+  "v2/ThreadReadResponse": {
+    "properties": {
+      "thread": {
+        "$ref": "#/definitions/Thread"
+      }
+    },
+    "required": [
+      "thread"
+    ],
+    "definitions": {
+      "Thread": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Turn"
+            }
+          },
+          "status": {
+            "$ref": "#/definitions/ThreadStatus"
+          }
+        }
+      },
+      "Turn": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "inProgress",
+              "completed",
+              "failed",
+              "interrupted"
+            ]
+          }
+        }
+      },
+      "ThreadStatus": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "idle"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "active"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "notLoaded"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "systemError"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "v2/TurnStartResponse": {
+    "properties": {
+      "turn": true
+    },
+    "required": [
+      "turn"
+    ]
+  },
+  "v2/TurnSteerResponse": {
+    "properties": {
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "turnId"
+    ]
+  },
+  "DynamicToolCallParams": {
+    "properties": {
+      "arguments": true,
+      "callId": {
+        "type": "string"
+      },
+      "namespace": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "tool": {
+        "type": "string"
+      },
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "arguments",
+      "callId",
+      "threadId",
+      "tool",
+      "turnId"
+    ]
+  },
+  "v2/ThreadTokenUsageUpdatedNotification": {
+    "properties": {
+      "threadId": {
+        "type": "string"
+      },
+      "tokenUsage": true,
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "tokenUsage",
+      "turnId"
+    ]
+  }
+}

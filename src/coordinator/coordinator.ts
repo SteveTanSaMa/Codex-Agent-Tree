@@ -60,7 +60,7 @@ export interface CoordinatorOptions {
   runtimeHome: string;
   executable?: string;
   credential?: ProviderCredential;
-  expectedVersion: string;
+  expectedVersion?: string;
   workspace?: WorkspacePolicy;
 }
 function nativeTurns(value: unknown): Record<string, unknown>[] {
@@ -180,7 +180,6 @@ export class Coordinator {
         runtime ??
         new CodexRuntime({
           home: options.runtimeHome,
-          expectedVersion: options.expectedVersion,
           ...(options.executable ? { executable: options.executable } : {}),
           ...(options.credential ? { credential: options.credential } : {}),
         });
@@ -237,6 +236,7 @@ export class Coordinator {
         "default",
         info.nativePid,
         info.protocolVersion,
+        info.qualification,
       );
       await this.reconcile();
       this.ready = true;
@@ -1012,6 +1012,7 @@ export class Coordinator {
     return {
       ...agent,
       workScope: this.store.scopes.summary(agentId),
+      runtimeQualification: this.store.runtimeQualification(),
       workspace: this.workspace
         ? {
             ...this.workspace.describe(agent),

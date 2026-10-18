@@ -4,6 +4,7 @@ import { integer, requireCondition, text } from "../core/errors.ts";
 import type { Agent } from "./store.ts";
 
 export const workScopeSchema = `
+  CREATE TABLE IF NOT EXISTS runtime_qualifications(server_generation INTEGER PRIMARY KEY,manifest TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS attempt_history_page ON turn_attempts(agent_id,created_at,id);
   CREATE INDEX IF NOT EXISTS agent_message_status ON messages(recipient_id,status);
   CREATE INDEX IF NOT EXISTS human_message_status ON operator_messages(recipient_id,status);

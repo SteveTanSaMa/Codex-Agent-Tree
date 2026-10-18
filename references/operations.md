@@ -1,6 +1,6 @@
 # Team operations
 
-All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state DIR`. Default state: `~/.cat/team`. Use dedicated short paths because macOS Unix sockets are length-limited. Tested protocol: `codex-cli 0.162.0-alpha.17.2`; do not change the pin without qualification.
+All commands below use `node "$SKILL_DIR/scripts/cat.mjs"` and accept `--state DIR`. Default state: `~/.cat/team`. Use dedicated short paths because macOS Unix sockets are length-limited. Current main uses capability-based CLI admission, with no exact release pin. Versions and protocol fingerprints are diagnostic evidence; missing required capabilities block startup. Published Beta 2 retains its historical pin.
 
 For repository coding, initialize a new opt-in workspace using [coding operations](coding.md). Existing text-only teams keep their permissions.
 
@@ -166,7 +166,7 @@ Read [interactive control](../docs/interactive-control.md) for current-Turn guid
 
 1. Run `doctor --state "$STATE"` and inspect `tree`, unknown Attempts, pending messages and active commands. Stop accepting new operator work during the handover. Prefer an idle boundary; `stop` alone leaves accepted native work alive.
 2. Run `stop`, then verify the old Coordinator has exited and its control socket is gone. Back up the entire stopped state directory, including any SQLite sidecars and worktrees. Retain the dedicated runtime home and a copy of its configuration; protect backups like the original state.
-3. If an App update changed the configured executable's version, verify an already retained binary against the exact pin. While stopped, update only this team's `config.json.executable` to that binary. Do not change the version guard, credentials, provider, model or workspace grants to force startup.
+3. If changing the selected executable, qualify its capabilities in a separate environment first. An old `expectedVersion` config field is ignored by current main. Never switch a live daemon underneath accepted work; settle or quarantine native execution first. Do not change credentials, provider, model or workspace grants to force startup.
 4. Start the same state with the new source. Compare stable Agent IDs, binding Thread IDs/generations, historical Attempt IDs, counters and workspace files against the backup. Review reconciliation errors and unknown evidence before dispatching tests. Old policy and limits remain intact; enabling interactive policy or changing reminders is a separate explicit operator action.
 5. Validate with bounded work, then check restart continuity and reminder/event cursors. An interrupted Turn without final usage must retain unknown accounting. Do not replay it or invent a final receipt merely to clean the display.
 

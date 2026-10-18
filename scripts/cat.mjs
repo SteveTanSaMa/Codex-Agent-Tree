@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { qualifyCodex } from "../src/runtime/codex/compatibility.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const expected = "codex-cli 0.162.0-alpha.17.2";
 const args = process.argv.slice(2);
 const command = args.shift() ?? "help";
 
@@ -29,6 +29,14 @@ function doctor() {
     timeout: 10000,
   });
   const version = codex.stdout?.trim() ?? "";
+  let qualification;
+  let capabilityError;
+  try {
+    qualification = qualifyCodex(executable);
+  } catch (error) {
+    capabilityError =
+      error instanceof Error ? error.message : "Capability probe failed";
+  }
   const checks = {
     node: { ok: nodeOK, actual: process.version, required: ">=26.3.1" },
     platform: {
@@ -37,7 +45,7 @@ function doctor() {
       tested: "darwin/arm64",
     },
     codex: {
-      ok: !codex.error && codex.status === 0 && version === expected,
+      ok: !codex.error && codex.status === 0 && qualification !== undefined,
       actual: version || "unavailable",
       executable,
       credentialSource: team?.credential?.keychainService
@@ -45,7 +53,9 @@ function doctor() {
         : team?.credential
           ? "environment"
           : "file-auth",
-      required: expected,
+      policy: "capabilities-v1",
+      qualification,
+      capabilityError,
     },
     dependencies: {
       ok: existsSync(join(root, "node_modules/ws/package.json")),

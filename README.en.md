@@ -1,6 +1,6 @@
 # Codex Agent Tree
 
-> This README describes development on main; published packages contain the features of their matching tags. Post-Beta-2 main uses schema 13 with scope replacement and tool status projection v2; these changes are unreleased.
+> This README describes development on main; published packages contain the features of their matching tags. Post-Beta-2 main uses schema 13 with scope replacement, tool status projection v2 and capability admission instead of an exact CLI pin; these changes are unreleased.
 
 [简体中文](README.md) · English
 
@@ -34,7 +34,7 @@ Avoid the installer's Git sparse-checkout method for this root-level Skill: it c
 
 Use `$codex-agent-tree` in a new conversation. The repository root is the complete Skill, containing `SKILL.md` and its helpers; no separate MCP server is required.
 
-Prepare Node and the exact Codex CLI version above, then complete file-backed login with `codex login`. This project does not replace your Codex installation. Install runtime dependencies and check prerequisites:
+Prepare Node and a Codex CLI satisfying the required protocol contracts, then complete file-backed login with `codex login`. This project does not replace your Codex installation. Install runtime dependencies and check prerequisites:
 
 ```sh
 SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/codex-agent-tree"

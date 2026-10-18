@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import WebSocket from "ws";
 import { CodexJsonRpcClient, type RequestId } from "./vendor/jsonrpc-client.ts";
 import { requireCondition } from "../../core/errors.ts";
+import { qualifyCodex, type Qualification } from "./compatibility.ts";
 
 const execute = promisify(execFile);
 export type RecordValue = Record<string, unknown>;
@@ -82,7 +83,8 @@ export function runtimeEnvironment(
 export interface RuntimeOptions {
   home: string;
   executable?: string;
-  expectedVersion: string;
+  /** Legacy configuration field; admission is capability-based. */
+  expectedVersion?: string;
   credential?: ProviderCredential;
 }
 export interface DynamicTool {
@@ -106,6 +108,7 @@ export class CodexRuntime {
   private rpc: CodexJsonRpcClient | undefined;
   private connectionGeneration = 0;
   private nativePid: number | null = null;
+  private qualification: Qualification | undefined;
   private incoming: PassThrough | undefined;
   private outgoing: PassThrough | undefined;
   onEvent: (event: RuntimeEvent) => void = () => {};
@@ -159,12 +162,8 @@ export class CodexRuntime {
   }
   async connect(): Promise<void> {
     requireCondition(!this.rpc, "CONFLICT", "Runtime is already connected");
-    const version = (await this.command(["--version"])).trim();
-    requireCondition(
-      version === this.options.expectedVersion,
-      "CONFLICT",
-      `Codex protocol version mismatch: ${version}`,
-    );
+    this.qualification = qualifyCodex(this.options.executable ?? "codex");
+    const version = this.qualification.cliVersion;
     mkdirSync(this.options.home, { recursive: true, mode: 0o700 });
     // Settings apply only to the caller-selected, dedicated runtime home.
     const settingsDir = join(this.options.home, "app-server-daemon");
@@ -185,10 +184,9 @@ export class CodexRuntime {
     );
     requireCondition(
       `codex-cli ${protocolString(lifecycle.managedCodexVersion)}` ===
-        this.options.expectedVersion &&
-        lifecycle.appServerVersion === lifecycle.managedCodexVersion,
+        version && lifecycle.appServerVersion === lifecycle.managedCodexVersion,
       "CONFLICT",
-      "Managed daemon version differs from the locked protocol",
+      "Launcher and running daemon differ; reconcile existing native work before switching binaries",
     );
     requireCondition(
       lifecycle.pid === undefined ||
@@ -268,11 +266,16 @@ export class CodexRuntime {
       throw error;
     }
   }
-  connectionInfo() {
+  connectionInfo(): {
+    nativePid: number | null;
+    protocolVersion: string;
+    qualification?: Qualification;
+  } {
     requireCondition(this.rpc, "STATE_BLOCKED", "No connected runtime");
     return {
       nativePid: this.nativePid,
-      protocolVersion: this.options.expectedVersion,
+      protocolVersion: this.qualification!.cliVersion,
+      qualification: this.qualification!,
     };
   }
   isCurrent(generation: number): boolean {

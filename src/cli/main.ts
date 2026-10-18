@@ -520,7 +520,7 @@ try {
         {
           stateDirectory: state,
           runtimeHome,
-          expectedVersion: "codex-cli 0.162.0-alpha.17.2",
+          compatibilityPolicy: "capabilities-v1",
           ...(flag("executable")
             ? { executable: resolve(flag("executable")!) }
             : {}),

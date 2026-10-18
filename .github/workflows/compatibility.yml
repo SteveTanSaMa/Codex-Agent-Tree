@@ -1,0 +1,35 @@
+name: Compatibility qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - { os: macos-15, node: '26.3.1' }
+          - { os: macos-15, node: '26' }
+          - { os: ubuntu-24.04, node: '26.3.1' }
+          - { os: ubuntu-24.04, node: '26' }
+          - { os: ubuntu-24.04-arm, node: '26' }
+          - { os: windows-2022, node: '26' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node -e "console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,versions:process.versions}))"
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - if: runner.os != 'Windows'
+        run: node --test test/integration/work-scopes.test.ts test/integration/task-board.test.ts test/integration/scheduler-history.test.ts test/fault/storage-admission.test.ts
+      - if: runner.os == 'macOS'
+        run: npm test
+      - if: runner.os == 'macOS'
+        run: npm run test:fault

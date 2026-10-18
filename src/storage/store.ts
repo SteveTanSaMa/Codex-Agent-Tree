@@ -1868,12 +1868,13 @@ export class Store {
     domain: string,
     nativePid: number | null,
     protocolVersion: string,
+    qualification?: unknown,
   ): number {
     text(domain, "runtime domain", 128);
     if (nativePid !== null) integer(nativePid, "native PID", 1);
     text(protocolVersion, "protocol version", 128);
-    const generation = this.transaction(() =>
-      Number(
+    const generation = this.transaction(() => {
+      const generation = Number(
         this.run(
           "INSERT INTO runtime_connections(domain,native_pid,protocol_version,owner_generation,created_at) VALUES(?,?,?,?,?)",
           domain,
@@ -1882,8 +1883,21 @@ export class Store {
           this.generation,
           now(),
         ).lastInsertRowid,
-      ),
-    );
+      );
+      this.run(
+        "INSERT INTO runtime_qualifications VALUES(?,?)",
+        generation,
+        JSON.stringify({
+          qualification: qualification ?? null,
+          node: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          sqlite: this.one("SELECT sqlite_version() AS version")!.version,
+          recordedAt: now(),
+        }),
+      );
+      return generation;
+    });
     this.runtimeGeneration = generation;
     return generation;
   }
@@ -1908,6 +1922,12 @@ export class Store {
   }
   runtimeConnections(): Row[] {
     return this.all("SELECT * FROM runtime_connections ORDER BY generation");
+  }
+  runtimeQualification() {
+    const row = this.one(
+      "SELECT manifest FROM runtime_qualifications ORDER BY server_generation DESC LIMIT 1",
+    );
+    return row ? JSON.parse(String(row.manifest)) : null;
   }
   runtimeBlock(agentId: string): Row | undefined {
     return this.one("SELECT * FROM runtime_blocks WHERE agent_id=?", agentId);
