@@ -29,7 +29,7 @@ if not args.smoke:
     assert last['harnessHashes']==sources, 'changed harness requires a fresh smoke'
     result=json.loads((Path(last['runDir'])/'result.json').read_text())
     cleanup=json.loads((Path(last['runDir'])/'watchdog-result.json').read_text())
-    assert result['phase']=='completed' and not result['failure'] and cleanup['runnerExitCode']==0 and not cleanup['forcedDeadline'], 'smoke and cleanup must pass'
+    assert result['phase']=='completed' and not result.get('failure') and cleanup['runnerExitCode']==0 and not cleanup['forcedDeadline'], 'smoke and cleanup must pass'
 assert shutil.disk_usage('/tmp').free>8*1024**3, 'at least 8 GiB free space required'
 stamp=datetime.datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')
 run=artifacts/(('smoke-' if args.smoke else 'nine-hour-')+stamp);run.mkdir(mode=0o700)
