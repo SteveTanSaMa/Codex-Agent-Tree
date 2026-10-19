@@ -30,3 +30,14 @@ A matching three-profile five-minute preflight must complete and clean up before
 本次正式负载须使用带此修复的独立候选安装副本，原 Beta 3 安装包与 release 保持不变。启动器同时校验预检与正式运行的 Runtime 源文件指纹和冻结 harness 哈希。首套失败证据保留，不计作预检通过。
 
 The initial three-profile preflight exposed an early-tool race: agent_ack reached the host before the start ACK was locally bound and was rejected; its message became unknown after a completed Attempt. The failed work is retained without replay. The fix waits for this host's dispatch binding before authenticating tool requests, without trusting caller-supplied Turn IDs. A deterministic test checks early valid and forged requests. The full load uses a separate candidate install with this fix; published Beta 3 assets stay unchanged. Matching Runtime payload fingerprints and frozen harness hashes are mandatory between preflight and full load.
+
+
+## 正式运行已启动 / Full suite launched
+
+候选修复后的三组预检 `dense-smoke-20261019-101854` 全部通过：normal 83 轮、recovery 84 轮、conflict 73 轮；各组 SQLite/Native 历史对账、watchdog 清理通过。默认回归 176 通过、17 条件跳过；故障注入 44 通过，类型检查通过。启动器最初因仅约 10 GiB 空闲拒绝正式启动；在保留数据库、配置、会话和日志后，仅清理已结束旧测试的 14 个 daemon 安装缓存（每项文件大小及 SHA256 清单保存在对应旧运行目录），可用空间恢复约 14.9 GiB。
+
+正式 suite `dense-hour-20261019-102508` 于北京时间 2026-10-19 10:25 启动，预计 11:25 完成，最晚约 11:40 清理。源提交 `d023e96`，候选安装指纹与预检一致；原 Beta 3 发布包不变。每套独立随机端口与 `/tmp/cat-soak-*` 路径记录在 launch/status 中。监测每五分钟检查，正常保持安静，不自动重测；最终结果待定。
+
+All corrected candidate preflights passed: 83 normal, 84 recovery and 73 conflict rounds, including SQLite/native history checks and watchdog cleanup. Default regressions: 176 passed, 17 conditional skips; fault injection: 44 passed; type checking passed. The first full-start attempt was safely rejected for low disk space. Only reproducible daemon installation caches from 14 already-cleaned old test homes were removed, retaining size/SHA256 manifests and all database, configuration, session and log evidence; free space recovered to approximately 14.9 GiB.
+
+The full suite `dense-hour-20261019-102508` started at 10:25 Asia/Shanghai, expected to finish at 11:25 with cleanup by approximately 11:40. Source commit: `d023e96`; candidate payload fingerprints match the passing preflight. Final outcome is pending. Monitoring runs every five minutes, stays quiet during normal execution and performs no automatic retry.
