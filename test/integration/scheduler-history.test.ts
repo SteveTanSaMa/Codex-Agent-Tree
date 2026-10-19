@@ -391,3 +391,61 @@ test("early native tools wait for the authoritative start ACK and reject a misma
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("early tool remains unauthorized when start ACK is lost and dispatch becomes unknown", async () => {
+  const dir = mkdtempSync("/tmp/cat-early-lost-ack-");
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  class Runtime extends ControlledRuntime {
+    override async startTurn(
+      threadId: string,
+      input: string,
+      attemptId: string,
+    ): Promise<string> {
+      const turnId = await super.startTurn(threadId, input, attemptId);
+      this.onRequest({
+        id: 103,
+        method: "item/tool/call",
+        connectionGeneration: 1,
+        params: { threadId, turnId, tool: "agent_status", arguments: {} },
+      });
+      await gate;
+      throw new Error("lost start ACK");
+    }
+  }
+  const runtime = new Runtime();
+  const c = new Coordinator(
+    {
+      stateDirectory: dir,
+      runtimeHome: join(dir, "h"),
+      expectedVersion: "fixture",
+    },
+    runtime,
+  );
+  let starting: Promise<void> | undefined;
+  try {
+    const root = c.store.createRoot("Lead", "work", rootSettings({}).limits);
+    starting = c.start();
+    await until(() => runtime.starts.length === 1);
+    assert.equal(runtime.responses.length, 0);
+    release();
+    await starting;
+    await until(() => runtime.responses.length === 1);
+    assert.ok(JSON.stringify(runtime.responses).includes("FORBIDDEN"));
+    assert.equal(c.store.attempts(root.id)[0]!.state, "unknown");
+    assert.equal(runtime.starts.length, 1);
+    assert.equal(
+      c.store.db
+        .prepare("SELECT COUNT(*) AS n FROM events WHERE kind='tool.completed'")
+        .get()!.n,
+      0,
+    );
+  } finally {
+    release();
+    await starting;
+    await c.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
