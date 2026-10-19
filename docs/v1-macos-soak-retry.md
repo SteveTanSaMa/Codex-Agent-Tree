@@ -62,3 +62,10 @@ The third run stopped early after about 2h 52m 18s while entering round 173, wit
 默认回归 173 通过、17 条件跳过，类型检查通过。smoke `smoke-20261019-071602` 完成 58 轮、2,012 次本地请求，三处恢复及最终历史对账通过，analysis=passed、flags=[]，watchdog exit=0、forcedDeadline=false。新独立运行 `nine-hour-20261019-072118` 于北京时间 07:21:18 启动，预计 16:21:19 完成，最晚约 16:36:19 清理；源提交 `b17db02`，四份冻结文件与通过的 smoke 哈希一致。Beta 3 Runtime 不变，最终长期结果待定；监测继续跟随 active.json，09:00 后禁止新启动。
 
 Default regression: 173 passed, 17 conditional skips; type checking passed. Smoke `smoke-20261019-071602` passed 58 rounds and 2,012 local requests, all three recovery checkpoints and final native history reconciliation, with no analysis flags and clean watchdog exit. Independent full run `nine-hour-20261019-072118` started at 07:21:18 Asia/Shanghai, expected to finish at 16:21:19, with cleanup by approximately 16:36:19. Source commit `b17db02` and all frozen harness hashes match the successful smoke. Published Beta 3 Runtime remains unchanged; final long-run outcome is pending. Monitoring follows active.json; no new starts after 09:00.
+
+
+## 用户提前结束 / User-requested early termination
+
+北京时间 2026-10-19 09:20，用户要求提前结束。已对验证身份的 runner 发送 SIGTERM，由专属 watchdog 完成清理，未强制截止；自动监测已暂停，不再复测。运行时长 1.984 小时，轮次计数 119，本地合成请求 4080。原始结果保留 SIGTERM 退出记录，另存 operator-stop.json 标明用户原因；analysis=review-required。本轮属于用户取消，不能作为九小时通过或据此宣称 Runtime 缺陷。
+
+The user requested early termination at 09:20 Asia/Shanghai. SIGTERM was sent to the verified runner; its dedicated watchdog completed cleanup without a forced deadline. Monitoring is paused and no retry will start. Elapsed time: 1.984 hours; round counter: 119; local synthetic requests: 4080. Raw SIGTERM evidence and operator-stop.json are retained; analysis outcome is review-required. This is a user-cancelled run, not a nine-hour pass or evidence of a Runtime defect.
