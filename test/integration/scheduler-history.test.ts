@@ -324,3 +324,70 @@ test("shutdown discards queued dispatch and a metadata response arriving after s
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("early native tools wait for the authoritative start ACK and reject a mismatched Turn", async () => {
+  const dir = mkdtempSync("/tmp/cat-early-tool-");
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  class Runtime extends ControlledRuntime {
+    override async startTurn(
+      threadId: string,
+      input: string,
+      attemptId: string,
+    ) {
+      const turnId = await super.startTurn(threadId, input, attemptId);
+      for (const [id, turn] of [
+        [101, turnId],
+        [102, "forged-turn"],
+      ] as const)
+        this.onRequest({
+          id,
+          method: "item/tool/call",
+          connectionGeneration: 1,
+          params: {
+            threadId,
+            turnId: turn,
+            tool: "agent_status",
+            arguments: {},
+          },
+        });
+      await gate;
+      return turnId;
+    }
+  }
+  const runtime = new Runtime();
+  const c = new Coordinator(
+    {
+      stateDirectory: dir,
+      runtimeHome: join(dir, "h"),
+      expectedVersion: "fixture",
+    },
+    runtime,
+  );
+  let starting: Promise<void> | undefined;
+  try {
+    c.store.createRoot("Lead", "work", rootSettings({}).limits);
+    starting = c.start();
+    await until(() => runtime.starts.length === 1);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(runtime.responses.length, 0);
+    release();
+    await starting;
+    await until(() => runtime.responses.length === 2);
+    assert.ok(JSON.stringify(runtime.responses).includes("FORBIDDEN"));
+    assert.equal(
+      c.store.attempts(c.store.agents()[0]!.id)[0]!.turn_id,
+      "turn-1",
+    );
+    assert.ok(
+      c.store.db
+        .prepare("SELECT 1 FROM events WHERE kind='tool.completed'")
+        .get(),
+    );
+  } finally {
+    release();
+    await starting;
+    await c.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

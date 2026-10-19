@@ -135,6 +135,7 @@ export class Coordinator {
   private scheduleDrain: Promise<void> | undefined;
   private resolveScheduleDrain: (() => void) | undefined;
   private requestedInterrupts = new Set<string>();
+  private startBindings = new Map<string, Promise<void>>();
   private ticking = false;
   private reconciliation: Promise<void> | undefined;
   private reconcileRequested = false;
@@ -603,6 +604,11 @@ export class Coordinator {
         attempt.id,
       );
       this.store.markStarting(attempt.id);
+      let releaseBinding!: () => void;
+      const bindingReady = new Promise<void>((resolve) => {
+        releaseBinding = resolve;
+      });
+      this.startBindings.set(attempt.thread_id, bindingReady);
       try {
         const turnId = await this.runtime.startTurn(
           attempt.thread_id,
@@ -635,6 +641,10 @@ export class Coordinator {
             "Turn dispatch failed or ACK lost; inspect native history before retry",
           );
         throw error;
+      } finally {
+        if (this.startBindings.get(attempt.thread_id) === bindingReady)
+          this.startBindings.delete(attempt.thread_id);
+        releaseBinding();
       }
     } catch (error) {
       if (
@@ -844,6 +854,14 @@ export class Coordinator {
         b,
         "FORBIDDEN",
         "Unmanaged Thread cannot invoke Agent tools",
+      );
+      // Native execution may request a tool before turn/start ACK processing.
+      // Wait for our own dispatch to settle; never trust the caller's Turn ID to bind it.
+      await this.startBindings.get(threadId);
+      requireCondition(
+        this.runtime.isCurrent(request.connectionGeneration),
+        "FORBIDDEN",
+        "Stale runtime connection",
       );
       actor = this.store.authenticate(threadId, turnId, b.generation);
       const tool = protocolString(p.tool);
