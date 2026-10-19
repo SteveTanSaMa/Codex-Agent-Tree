@@ -29,12 +29,17 @@ const run = resolve(flag("run-dir")),
   base = resolve(flag("base")),
   skill = resolve(flag("skill")),
   executable = resolve(flag("executable"));
+const dense = args.includes("--dense");
+const profile = flag("profile") ?? "normal";
+assert.ok(["normal", "recovery", "conflict"].includes(profile));
 const smoke = args.includes("--smoke"),
   duration = Number(flag("duration-seconds")) * 1000;
 assert.ok(
-  smoke
-    ? duration >= 180000 && duration <= 600000
-    : duration >= 8 * 3600000 && duration <= 10 * 3600000,
+  dense
+    ? duration >= 60000 && duration <= 3600000
+    : smoke
+      ? duration >= 180000 && duration <= 600000
+      : duration >= 8 * 3600000 && duration <= 10 * 3600000,
 );
 assert.ok(
   base.startsWith("/tmp/cat-soak-") && !existsSync(base),
@@ -45,10 +50,13 @@ const wrapper = join(skill, "scripts/cat.mjs");
 const { runtimeEnvironment } = await import(
   pathToFileURL(join(skill, "src/runtime/codex/adapter.ts")).href
 );
-const ms = (n) => (smoke ? n / 30 : n);
+const ms = (n) => (smoke || dense ? n / 30 : n);
 const sleep = (n) => new Promise((r) => setTimeout(r, n));
 const started = Date.now(),
   deadline = started + duration;
+let completedRounds = 0,
+  expectedConflictRejections = 0;
+const conflictRound = (n) => dense && profile === "conflict" && n % 10 === 1;
 let abort = false,
   failure,
   sequence = 0,
@@ -136,7 +144,7 @@ async function call(lane, ...args) {
   const { stdout } = await execute(
     process.execPath,
     [wrapper, ...args, "--state", paths[lane].state],
-    { timeout: 45000, maxBuffer: 4 * 1024 * 1024 },
+    { timeout: 45000, maxBuffer: 128 * 1024 * 1024 },
   );
   return JSON.parse(stdout);
 }
@@ -294,6 +302,24 @@ function plan(role, n, mode, user, jobKey) {
     ack();
     const file = role === "coderB" ? "b.txt" : "a.txt";
     steps.push(["read_file", { path: file }]);
+    if (role === "reviewer" && conflictRound(n)) {
+      steps.push([
+        "read_file",
+        async () => {
+          await until(
+            () =>
+              rows(
+                "coding",
+                "SELECT call_id FROM workspace_commands WHERE agent_id=? AND state='accepted'",
+                identities.coderA,
+              ).length === 0,
+            "conflicting test command did not settle",
+            15000,
+          );
+          return { path: file };
+        },
+      ]);
+    }
     if (role !== "reviewer") {
       const content = n + "\n";
       steps.push([
@@ -301,7 +327,10 @@ function plan(role, n, mode, user, jobKey) {
         { path: file, expectedHash: hash(expected[role]), content },
       ]);
       expected[role] = content;
-      steps.push(["run_test", { name: "unit" }]);
+      steps.push([
+        "run_test",
+        { name: role === "coderA" && conflictRound(n) ? "conflict" : "unit" },
+      ]);
     }
     const reportNumber = n * 10 + { coderA: 1, coderB: 2, reviewer: 3 }[role];
     steps.push([
@@ -334,7 +363,10 @@ const server = createServer((req, res) => {
       );
       requests++;
       receivedBytes += bytes;
-      assert.ok(requests <= 60000, "request ceiling exceeded");
+      assert.ok(
+        requests <= (dense ? 1000000 : 60000),
+        "request ceiling exceeded",
+      );
       const value = JSON.parse(body),
         user = latestUser(value);
       const markers = [
@@ -399,7 +431,7 @@ const server = createServer((req, res) => {
           ),
           "read-only catalog widened",
         );
-      const finish = () => {
+      const finish = async () => {
         try {
           reply(
             res,
@@ -409,7 +441,7 @@ const server = createServer((req, res) => {
               call_id: "soak_" + jobKey + "_" + job.index,
               name,
               arguments: JSON.stringify(
-                typeof raw === "function" ? raw() : raw,
+                typeof raw === "function" ? await raw() : raw,
               ),
             },
             id,
@@ -422,7 +454,7 @@ const server = createServer((req, res) => {
       if (delay) {
         const timer = setTimeout(finish, delay);
         res.on("close", () => clearTimeout(timer));
-      } else setTimeout(finish, smoke ? 10 : 100);
+      } else setTimeout(finish, dense ? 0 : smoke ? 10 : 100);
     } catch (e) {
       fail(e);
       if (!res.headersSent) res.writeHead(500);
@@ -445,6 +477,17 @@ async function initialize(lane, workspace) {
       testsFile,
       JSON.stringify({
         unit: { executable: process.execPath, args: ["verify.cjs"] },
+        ...(dense && profile === "conflict"
+          ? {
+              conflict: {
+                executable: process.execPath,
+                args: [
+                  "-e",
+                  "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5000);require('./verify.cjs')",
+                ],
+              },
+            }
+          : {}),
       }),
     );
   await call(
@@ -479,7 +522,7 @@ async function initialize(lane, workspace) {
     "unlimited",
   );
   identities[role] = root.id;
-  if (smoke) {
+  if (smoke || dense) {
     const policy = {
       mode: "interactive",
       autonomyWarnMs: ms(900000),
@@ -506,9 +549,20 @@ function assertState(lane, final = false) {
   );
   const rejected = rows(
     lane,
-    "SELECT sequence FROM events WHERE kind='tool.rejected'",
+    "SELECT sequence,agent_id,body FROM events WHERE kind='tool.rejected'",
   );
-  assert.equal(rejected.length, 0, "unexpected tool rejection");
+  assert.equal(
+    rejected.length,
+    lane === "coding" ? expectedConflictRejections : 0,
+    "unexpected tool rejection count",
+  );
+  for (const event of rejected) {
+    assert.equal(event.agent_id, identities.reviewer);
+    assert.deepEqual(JSON.parse(event.body), {
+      tool: "read_file",
+      code: "STATE_BLOCKED",
+    });
+  }
   for (const command of rows(
     lane,
     "SELECT state,result_json FROM workspace_commands",
@@ -675,11 +729,16 @@ async function sample() {
     deadline: new Date(deadline).toISOString(),
     sampledAt: now(),
     smoke,
+    dense,
+    profile,
+    completedRounds,
+    targetRoundsPerMinute: dense ? 200 : null,
     pids,
     paths,
     identities,
     requests,
     round: sequence,
+    providerPort: port,
     failure,
   });
 }
@@ -688,7 +747,20 @@ async function codingLoop() {
     const begin = Date.now(),
       n = ++sequence;
     for (const role of ["coderA", "coderB", "reviewer"]) {
-      if (role === "reviewer")
+      if (role === "reviewer" && conflictRound(n)) {
+        await until(
+          () =>
+            rows(
+              "coding",
+              "SELECT call_id FROM workspace_commands WHERE agent_id=? AND state='accepted'",
+              identities.coderA,
+            ).length === 1,
+          "expected shared-workspace command lock missing",
+          15000,
+        );
+        expectedConflictRejections++;
+      }
+      if (role === "reviewer" && !conflictRound(n))
         await until(
           () =>
             dbRead("coding", (db) =>
@@ -791,7 +863,9 @@ async function codingLoop() {
         round: n,
         attemptCount: attempts("coding").length,
       });
-    await waitTo(begin + (smoke ? 5000 : 60000));
+    completedRounds = n;
+    if (n === 1001) record("dense.thousand.pass", { completedRounds: n });
+    if (!dense) await waitTo(begin + (smoke ? 5000 : 60000));
   }
 }
 async function calibrateHold(mode, n) {
@@ -929,7 +1003,13 @@ async function calibrationLoop() {
   );
   assert.equal(attempts("calibration").length, count);
   record("calibration.pause.pass", { elapsedMs: Date.now() - t });
-  for (const [i, hour] of [2, 5, 8].entries()) {
+  for (const [i, hour] of (dense
+    ? Array.from(
+        { length: Math.ceil(duration / 60000) },
+        (_, i) => (130000 + i * 60000) / 3600000,
+      )
+    : [2, 5, 8]
+  ).entries()) {
     await waitTo(
       started + (smoke ? [130000, 190000, 250000][i] : hour * 3600000),
     );
@@ -1034,9 +1114,15 @@ try {
           .finally(() => (sampling = false));
       }
     },
-    smoke ? 5000 : 30000,
+    dense || smoke ? 5000 : 30000,
   );
-  await Promise.all([codingLoop().catch(fail), calibrationLoop().catch(fail)]);
+  await Promise.all([
+    codingLoop().catch(fail),
+    (dense && profile !== "recovery"
+      ? waitTo(deadline)
+      : calibrationLoop()
+    ).catch(fail),
+  ]);
   if (failure) throw new Error(failure);
   assert.ok(Date.now() >= deadline, "test ended early");
   for (const lane of Object.keys(paths)) {
@@ -1100,11 +1186,22 @@ try {
   const result = {
     phase: failure ? "failed" : "completed",
     smoke,
+    dense,
+    profile,
+    completedRounds,
+    targetRoundsPerMinute: dense ? 200 : null,
     startedAt: new Date(started).toISOString(),
     finishedAt: now(),
     elapsedMs: Date.now() - started,
     durationMs: duration,
     rounds: sequence,
+    completedRounds,
+    actualRoundsPerMinute: completedRounds / ((Date.now() - started) / 60000),
+    thousandRoundsReached: completedRounds > 1000,
+    targetRateReached:
+      completedRounds / ((Date.now() - started) / 60000) >= 200,
+    expectedConflictRejections,
+    providerPort: port,
     requests,
     receivedBytes,
     failure,

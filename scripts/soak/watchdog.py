@@ -17,6 +17,8 @@ parser.add_argument('--executable', required=True)
 parser.add_argument('--node', required=True)
 parser.add_argument('--duration-seconds', type=int, required=True)
 parser.add_argument('--smoke', action='store_true')
+parser.add_argument('--dense', action='store_true')
+parser.add_argument('--profile', choices=['normal','recovery','conflict'], default='normal')
 args = parser.parse_args()
 run = Path(args.run_dir).resolve()
 assert run.is_dir() and not (run / 'watchdog.json').exists()
@@ -25,6 +27,8 @@ assert str(base).startswith('/tmp/cat-soak-') and not base.exists()
 runner = Path(__file__).with_name('runner.mjs').resolve()
 command = [args.node, str(runner), '--run-dir', str(run), '--base', str(base), '--skill', args.skill,
            '--executable', args.executable, '--duration-seconds', str(args.duration_seconds)]
+if args.dense:
+    command += ['--dense', '--profile', args.profile]
 if args.smoke:
     command.append('--smoke')
 with (run / 'runner.log').open('w') as log:
