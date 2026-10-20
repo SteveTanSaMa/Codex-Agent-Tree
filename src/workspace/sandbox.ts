@@ -18,6 +18,15 @@ export function sandboxCommand(
     "STATE_BLOCKED",
     "Restricted test execution currently requires macOS Seatbelt",
   );
+  for (const e of command.networkEndpoints ?? [])
+    requireCondition(
+      e.address === "127.0.0.1" &&
+        Number.isInteger(e.port) &&
+        e.port >= 1 &&
+        e.port <= 65535,
+      "INVALID_INPUT",
+      "Fixed loopback IPv4 TCP endpoint required",
+    );
   const roots = [
     cwd,
     home,
@@ -38,6 +47,7 @@ export function sandboxCommand(
   const quoted = (s: string) => JSON.stringify(s);
   const profile = `(version 1)
 (deny default)
+${(command.networkEndpoints ?? []).map((e) => `(allow network-outbound (remote tcp "localhost:${e.port}"))`).join("\n")}
 (allow process-exec process-fork)
 (allow signal (target self))
 (allow sysctl-read)

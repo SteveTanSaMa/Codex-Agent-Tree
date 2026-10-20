@@ -1,14 +1,14 @@
 # Codex Agent Tree
 
-> 本文对应 Beta 3：schema 13、可撤销的子树工作范围、能力准入和增量有界调度。旧安装包的功能以对应 tag 为准。
+> main 当前为 Beta 4 候选（schema 14）：活跃查询、自动任务归档、只读诊断、交接预览及限定测试端点。已发布 Beta 3 不变；候选资格见[工程改进记录](docs/engineering-improvements.md)。
 
 简体中文 · [English](README.en.md)
 
 一个可安装的 Codex Skill：用独立、可恢复的 Codex Session 组成递归团队，支持消息唤醒、任务依赖、受控编码和故障对账。
 
-**`0.1.0-beta.3`：面向 macOS arm64、Node ≥26.3.1、单凭据域；Codex CLI 按所需协议能力准入，不再锁定精确版本。** `0.162.0-alpha.17.2` 与 `0.163.0-alpha.10.2` 已有原生行为验证。默认仍是文本分析；显式选择 Git 仓库后，Lead 使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
+**`0.1.0-beta.4` 候选：面向 macOS arm64、Node ≥26.3.1、单凭据域；Codex CLI 按所需协议能力准入，不再锁定精确版本。** `0.162.0-alpha.17.2` 与 `0.163.0-alpha.10.2` 已有原生行为验证。默认仍是文本分析；显式选择 Git 仓库后，Lead 使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
 
-Beta 限定于可信本地仓库；完整编码 Runtime 尚未支持 Linux/Windows、多凭据域或自动合并。见[编码边界](references/coding.md)、[Beta 3 验收](docs/beta-3-validation.md)和[分层兼容证据](docs/compatibility-recovery-results.md)。升级前停止 Coordinator 并备份完整 state；schema 12→13 保留身份、计数、队列和工作树，旧版不能读取新版状态。已有团队不自动获得新权限，原生 Thread 保留原工具目录。
+Beta 限定于可信本地仓库；完整编码 Runtime 尚未支持 Linux/Windows、多凭据域或自动合并。见[编码边界](references/coding.md)、[Beta 3 验收](docs/beta-3-validation.md)和[分层兼容证据](docs/compatibility-recovery-results.md)。升级前停止 Coordinator 并备份完整 state；schema 13→14 保留身份、计数、队列和工作树，旧版不能读取新版状态。已有团队不自动获得新权限，原生 Thread 保留原工具目录。
 
 Beta 3 新增子树 `scope-replace` 与未知命令收据的 `command-review`，强化旧工作代际授权检查，限制状态历史输出，并修复慢 RPC 阻塞新到达任务的调度问题。详见[操作说明](references/operations.md#scope-replacement)、[发布变更](docs/releases/v0.1.0-beta.3.md)和[验收记录](docs/beta-3-validation.md)。
 
@@ -42,7 +42,7 @@ node "$SKILL_DIR/scripts/cat.mjs" setup
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[Beta Release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.3) 提供同一套自包含 Skill，不包含依赖缓存或登录状态，解压后同样运行 `setup`。
+`setup` 在 Skill 内执行锁定的 `npm ci --omit=dev --ignore-scripts`，只安装运行依赖 `ws`；`doctor` 不调用模型。[已发布 Beta 3 ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.3) 是旧版本的自包含 Skill；当前 Beta 4 候选用 `npm run package:skill` 构建。二者均不包含依赖缓存或登录状态，解压后运行 `setup`。
 
 ## 使用
 
@@ -95,7 +95,7 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$HOME/.cat/code-team"
 | 二级 | 独立 detached worktree 读写 | 仅 `run_test` 白名单；没有通用 shell |
 | 三级及以下 | 读取父级工作树、搜索、diff | 没有 terminal 或测试执行权限 |
 
-受限工具为 `read_file`、`write_file`（哈希冲突校验）、`search_code`、`git_diff`、`run_test`。层级限制由宿主检查，隐藏工具即使被直接请求也不能越权。命令经过 macOS 沙箱，禁止联网，写入限自己的工作区，超时 30 秒，输出上限 64 KiB。Lead 与子节点命令均有持久收据；不确定结果不会自动重放。
+受限工具为 `read_file`、`write_file`（哈希冲突校验）、`search_code`、`git_diff`、`run_test`。层级限制由宿主检查，隐藏工具即使被直接请求也不能越权。命令经过 macOS 沙箱，默认禁止联网（命名测试可显式授权固定本地 TCP 端口），写入限自己的工作区，超时 30 秒，输出上限 64 KiB。Lead 与子节点命令均有持久收据；不确定结果不会自动重放。
 
 每个 coding state 只支持一棵 Lead 树。二级工作树固定从初始化提交创建，不复制依赖、忽略文件或后续父级修改；不要让不同 Coordinator 同时编辑同一个 Lead 仓库。依赖较重的项目可由 Lead 在已有依赖的原仓库运行集成测试。用量不代表供应商账单，Beta 也没有证明多 Agent 比单 Agent 更省 token。完整操作与恢复规则见[编码说明](references/coding.md)。
 
@@ -119,7 +119,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` 统一返回 Agent、任务摘要、预算、消息计数和阻塞原因。用其 cursor 调用 `wait`，之后用每次响应的顶层 cursor 续读，`hasMore` 表示还有事件页。`noProgress` 需要检查输入、fence、预算或未知执行，并非团队完成；等待不占用托管 Turn。详细动作、权限和输入文件格式见 [操作说明](references/operations.md)。
 
-升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 3 会将数据库迁移到 schema 13，旧版不能直接降级读取。已有团队保留各自的 token 策略，新团队默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
+升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 4 候选将数据库迁移到 schema 14，旧版不能直接降级读取。已有团队保留各自的 token 策略，新团队默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
 
 同时更换 CLI 时，停止进程并不会自动替换 daemon 管理包；按[更换可执行文件](references/operations.md#changing-the-codex-executable)先对账，再显式更新独立运行包。
 
@@ -157,3 +157,5 @@ Beta 2 支持在新团队 manifest 中显式登记外部只读资源，供受限
 新团队取消对话 token 配额；默认全树达到 5000000 总 token 提醒一次。`token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]` 可配置单次或增量提醒，`--disable` 关闭。提醒不暂停、不新增 Turn、不请求模型；用量缺失时显示未观测。详见[用量提醒与迁移说明](docs/token-reminders.md)。
 
 当前 main 的能力准入、跨环境与恢复补验见[本轮结果](docs/compatibility-recovery-results.md)。已发布 Beta 2 的固定 CLI 说明仅适用于该 tag；main 不再使用精确 CLI 版本锁。
+
+新增操作：`diagnose --state DIR` 只读诊断；`task-history --target ID --after 0 --limit 50` 历史分页；`handoff-record` / `handoff-preview` 交接与整合预览。完成任务自动归档并释放活跃容量，历史与删除分开。详见[操作说明](references/operations.md)与[macOS 配置](references/coding.md)。

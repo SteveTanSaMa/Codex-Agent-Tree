@@ -1,14 +1,14 @@
 # Codex Agent Tree
 
-> This README describes Beta 3: schema 13, revocable subtree work scopes, capability admission and incremental bounded scheduling. Older packages contain the features of their matching tags.
+> main is a Beta 4 candidate (schema 14): active queries, automatic task archives, read-only diagnosis, handoff previews and scoped test endpoints. Published Beta 3 is unchanged; see [engineering improvements](docs/engineering-improvements.md).
 
 [简体中文](README.md) · English
 
 An installable Codex Skill for recursive teams of independent, recoverable Codex sessions, with message wakeups, task dependencies, controlled coding and conservative recovery.
 
-**`0.1.0-beta.3`: macOS arm64, Node ≥26.3.1 and one credential domain. Codex CLI admission checks required protocol capabilities without an exact release pin.** Native behavior has been verified with `0.162.0-alpha.17.2` and `0.163.0-alpha.10.2`. Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved tests, and deeper members read-only tools. Your current conversation is the operator; the managed Root is a separate session.
+**`0.1.0-beta.4` candidate: macOS arm64, Node ≥26.3.1 and one credential domain. Codex CLI admission checks required protocol capabilities without an exact release pin.** Native behavior has been verified with `0.162.0-alpha.17.2` and `0.163.0-alpha.10.2`. Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved tests, and deeper members read-only tools. Your current conversation is the operator; the managed Root is a separate session.
 
-This Beta targets trusted local repositories. Full coding Runtime support for Linux/Windows, multiple credential domains and automatic merges remains unavailable. See [coding boundaries](references/coding.md), [Beta 3 qualification](docs/beta-3-validation.md) and [layered compatibility evidence](docs/compatibility-recovery-results.md). Stop the Coordinator and back up complete state before upgrading. Schema 12→13 preserves identities, counters, queues and worktrees; older versions cannot read the upgraded state. Existing teams gain no permissions automatically, and native Threads retain their tool catalogs.
+This Beta targets trusted local repositories. Full coding Runtime support for Linux/Windows, multiple credential domains and automatic merges remains unavailable. See [coding boundaries](references/coding.md), [Beta 3 qualification](docs/beta-3-validation.md) and [layered compatibility evidence](docs/compatibility-recovery-results.md). Stop the Coordinator and back up complete state before upgrading. Schema 13→14 preserves identities, counters, queues and worktrees; older versions cannot read the upgraded state. Existing teams gain no permissions automatically, and native Threads retain their tool catalogs.
 
 Beta 3 adds subtree `scope-replace` and `command-review` for unknown command receipts, enforces stale-scope authorization, bounds history output and fixes slow RPCs delaying newly arriving work. See [operations](references/operations.md#scope-replacement), [release changes](docs/releases/v0.1.0-beta.3.md) and [qualification](docs/beta-3-validation.md).
 
@@ -42,7 +42,7 @@ node "$SKILL_DIR/scripts/cat.mjs" setup
 node "$SKILL_DIR/scripts/cat.mjs" doctor
 ```
 
-`setup` runs locked `npm ci --omit=dev --ignore-scripts` inside the Skill, installing only the runtime dependency `ws`. `doctor` makes no model calls. The [Beta release ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.3) contains the same self-contained Skill without dependency caches or credentials; extract it and run `setup`.
+`setup` runs locked `npm ci --omit=dev --ignore-scripts` inside the Skill, installing only the runtime dependency `ws`. `doctor` makes no model calls. The [published Beta 3 ZIP](https://github.com/SteveTanSaMa/Codex-Agent-Tree/releases/tag/v0.1.0-beta.3) is the earlier self-contained Skill. Build the current Beta 4 candidate with `npm run package:skill`. Both exclude dependency caches and credentials; extract and run `setup`.
 
 ## Use
 
@@ -96,7 +96,7 @@ The operator-authored JSON maps names to fixed executables and argv, for example
 | Second | Own detached Git worktree | Approved `run_test` names; no general shell |
 | Third and deeper | Parent worktree read/search/diff | No terminal, writes or test execution |
 
-Restricted tools are `read_file`, hash-checked `write_file`, literal `search_code`, `git_diff` and `run_test`. Host authorization also rejects direct calls to tools hidden from a member. Commands use a macOS sandbox with network disabled, workspace-limited writes, a 30-second timeout and 64 KiB output limit. Persistent receipts protect against automatic replay of uncertain commands.
+Restricted tools are `read_file`, hash-checked `write_file`, literal `search_code`, `git_diff` and `run_test`. Host authorization also rejects direct calls to tools hidden from a member. Commands use a macOS sandbox with network denied by default (explicit named tests may access fixed loopback TCP ports), workspace-limited writes, a 30-second timeout and 64 KiB output limit. Persistent receipts protect against automatic replay of uncertain commands.
 
 Each coding state supports one Lead tree. Worktrees start from the initial commit, without dependencies, ignored files or subsequent parent changes. Do not run separate Coordinators against the same Lead checkout. Lead can run integration tests in the original checkout with its existing dependencies. Reported tokens are not billing; this Beta does not establish that teams use fewer tokens than a single agent. See [coding operations](references/coding.md) for setup, recovery and boundaries.
 
@@ -120,7 +120,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` combines agent summaries, tasks, budgets, message counts and blocking reasons. Pass its cursor to `wait`, then continue with each response's top-level cursor. `hasMore` indicates another event page. `noProgress` calls for inspecting missing input, fences, budgets or unknown work; it does not prove completion. Operator waiting does not occupy a managed Turn. See [operations](references/operations.md) for permissions, dependency edits, input files and cursor details.
 
-Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. Beta 3 migrates the database to schema 13; older versions cannot directly read it. Existing trees retain their token policies; new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
+Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. The Beta 4 candidate migrates the database to schema 14; older versions cannot directly read it. Existing trees retain their token policies; new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
 
 Changing the CLI also requires reconciling native work and explicitly updating the dedicated managed package; stopping the process alone does not replace it. See [changing the executable](references/operations.md#changing-the-codex-executable).
 
@@ -139,7 +139,7 @@ npm run package:skill
 
 Default tests do not consume model usage. Real tests use isolated temporary directories and clean up copied credentials and their own daemons. Evidence goes to `.artifacts/evidence/` and is not committed. See the [recursive example](examples/recursive-team/README.md).
 
-This Beta does not qualify Linux/Windows, multiple credential domains, automatic DAG execution, networked commands, automatic merging, a GUI or interactive approval queues. Recovery preserves ambiguous work as unknown rather than blindly replaying it. There is no claim of exactly-once external effects or evidence that teams outperform a single agent on quality or cost.
+This Beta does not qualify Linux/Windows, multiple credential domains, automatic DAG execution, general networked commands, automatic merging, a GUI or interactive approval queues. Recovery preserves ambiguous work as unknown rather than blindly replaying it. There is no claim of exactly-once external effects or evidence that teams outperform a single agent on quality or cost.
 
 [Execution limits plan](docs/execution-limits-plan.md) · [Task board plan](docs/task-board-plan.md) · [DeepSeek comparison](docs/deepseek-agent-team.md) · [Review fixes](docs/review-round-1.md) · [Architecture review and open issues](docs/review-architecture.md) · [Architecture](docs/architecture.md) · [Validation](docs/validation.md) · [Skill entry](SKILL.md)
 
@@ -160,3 +160,5 @@ Defaults warn after 15 minutes of autonomous execution, 10 minutes without selec
 New teams have no per-dialogue token allocation. Default: one tree-wide reminder at 5000000 total tokens. Configure with `token-reminder --target ID --threshold N [--every N] [--scope agent|tree] [--metric total|uncachedInput|output]`; disable with `--disable`. Alerts never pause, start Turns or request a model. Missing metrics remain unknown. See [reminders and migration](docs/token-reminders.md).
 
 For main capability admission, layered OS coverage and recovery evidence, see [qualification results](docs/compatibility-recovery-results.md). The published Beta 2 CLI pin applies to that tag; main no longer pins an exact CLI release.
+
+New operations: `diagnose --state DIR` for read-only diagnosis; `task-history --target ID --after 0 --limit 50` for bounded history; `handoff-record` / `handoff-preview` for reviewable integration. Completed tasks auto-archive and free active capacity while history and deletion remain distinct. See [operations](references/operations.md) and [macOS configuration](references/coding.md).

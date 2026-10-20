@@ -36,6 +36,7 @@ import type { DynamicTool } from "../runtime/codex/adapter.ts";
 export interface TestCommand {
   executable: string;
   args: string[];
+  networkEndpoints?: { address: string; port: number }[];
 }
 export interface RepositoryPolicy {
   repository: string;
@@ -325,6 +326,24 @@ export function validatePolicy(policy: RepositoryPolicy) {
       "INVALID_INPUT",
       "Test commands need a name, absolute executable and fixed argument list",
     );
+    if (command.networkEndpoints !== undefined) {
+      requireCondition(
+        Array.isArray(command.networkEndpoints) &&
+          command.networkEndpoints.length <= 8,
+        "INVALID_INPUT",
+        "At most eight fixed TCP endpoints per test",
+      );
+      for (const endpoint of command.networkEndpoints)
+        requireCondition(
+          endpoint &&
+            endpoint.address === "127.0.0.1" &&
+            Number.isInteger(endpoint.port) &&
+            endpoint.port >= 1 &&
+            endpoint.port <= 65535,
+          "INVALID_INPUT",
+          "Test network endpoint requires loopback address 127.0.0.1 and TCP port",
+        );
+    }
   }
 }
 const string = { type: "string" };
@@ -531,7 +550,7 @@ export class WorkspaceBroker {
         ? join(this.state, "workspaces", owner.id, repo.directory!)
         : join(this.state, "workspaces", owner.id);
   }
-  cwd(agent: Agent, repositoryId?: unknown): string {
+  cwd(agent: Agent, repositoryId?: unknown, provision = true): string {
     const { id, repo } = this.selection(agent, repositoryId);
     const owner = this.owner(agent);
     if (owner.depth === 0) return repo.repository;
@@ -539,7 +558,7 @@ export class WorkspaceBroker {
     const prior = this.paths.get(cacheKey);
     if (prior) return prior;
     const path = this.workspacePath(agent, id);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (provision) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     requireCondition(
       realpathSync(dirname(path)) === dirname(path),
       "FORBIDDEN",
@@ -548,7 +567,7 @@ export class WorkspaceBroker {
     const readyDirectory = this.policy.repositories
       ? join(this.state, "worktree-ready", owner.id)
       : join(this.state, "worktree-ready");
-    mkdirSync(readyDirectory, { recursive: true, mode: 0o700 });
+    if (provision) mkdirSync(readyDirectory, { recursive: true, mode: 0o700 });
     const marker = join(
       readyDirectory,
       (this.policy.repositories ? id : owner.id) + ".json",
@@ -565,6 +584,11 @@ export class WorkspaceBroker {
         : {}),
     });
     const fresh = !existsSync(path);
+    requireCondition(
+      provision || !fresh,
+      "STATE_BLOCKED",
+      "Inspection requires an existing verified worktree; provision it through normal scheduling first",
+    );
     requireCondition(
       fresh
         ? !existsSync(marker)
@@ -614,12 +638,106 @@ export class WorkspaceBroker {
     this.paths.set(cacheKey, path);
     return path;
   }
+  assertHandoffPaths(
+    agent: Agent,
+    repositoryId: string,
+    base: string,
+    commit?: string,
+  ) {
+    const names = this.inspectGit(agent, repositoryId, [
+      "diff",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      base,
+      ...(commit ? [commit] : []),
+      "--",
+    ])
+      .split("\0")
+      .filter(Boolean);
+    requireCondition(
+      names.every((p) => p.split("/").every((part) => !blocked(part))),
+      "FORBIDDEN",
+      "Handoff contains protected paths; preserve them for human review",
+    );
+  }
+  handoffFiles(agent: Agent, repositoryId: string) {
+    this.requireWorkspaceIdle(agent, repositoryId);
+    const names = this.inspectGit(agent, repositoryId, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ])
+      .split("\0")
+      .filter(Boolean);
+    requireCondition(
+      names.length <= 16,
+      "INVALID_INPUT",
+      "At most 16 untracked handoff files",
+    );
+    return names.map((path) => {
+      const full = this.path(agent, path, false, false, repositoryId);
+      requireCondition(
+        lstatSync(full).size <= 65536,
+        "INVALID_INPUT",
+        "Handoff file exceeds 64 KiB",
+      );
+      const content = readFileSync(full, "utf8");
+      requireCondition(
+        content.isWellFormed() &&
+          !content.includes("\0") &&
+          !content.includes("\ufffd"),
+        "INVALID_INPUT",
+        "Untracked handoff files must be UTF-8 text",
+      );
+      return { path, content, sha256: hash(content) };
+    });
+  }
+  inspectGit(
+    agent: Agent,
+    repositoryId: string,
+    args: string[],
+    input?: string,
+  ) {
+    requireCondition(
+      [
+        "rev-parse",
+        "merge-base",
+        "diff",
+        "status",
+        "merge-tree",
+        "ls-files",
+        "apply",
+      ].includes(args[0] ?? ""),
+      "FORBIDDEN",
+      "Read-only Git inspection only",
+    );
+    requireCondition(
+      args[0] !== "apply" || (args[1] === "--check" && input !== undefined),
+      "FORBIDDEN",
+      "Patch preview only",
+    );
+    this.requireWorkspaceIdle(agent, repositoryId, false, false);
+    const selection = this.selection(agent, repositoryId);
+    return this.sandboxGit(
+      this.cwd(agent, repositoryId, false),
+      args,
+      agent.id,
+      selection.repo,
+      undefined,
+      input,
+    );
+  }
   private sandboxGit(
     cwd: string,
     args: string[],
     agentId: string,
     repo: RepositoryPolicy,
     createPath?: string,
+    input?: string,
   ): string {
     const create = createPath !== undefined;
     const home = join(this.state, "git-homes", agentId);
@@ -654,11 +772,12 @@ export class WorkspaceBroker {
       create ? [createPath!, common] : [],
       true,
     );
-    return execFileSync(command.executable, command.args, {
+    const output = execFileSync(command.executable, command.args, {
       encoding: "utf8",
       timeout: 10000,
       maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
+      input: input ?? "",
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       env: {
         PATH: process.env.PATH,
         HOME: home,
@@ -668,7 +787,10 @@ export class WorkspaceBroker {
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_TERMINAL_PROMPT: "0",
       },
-    }).trim();
+    });
+    return args[0] === "diff" && args.includes("--binary")
+      ? output
+      : output.trim();
   }
   private path(
     agent: Agent,
@@ -762,8 +884,9 @@ export class WorkspaceBroker {
     agent: Agent,
     repositoryId?: unknown,
     command = false,
+    provision = true,
   ) {
-    const path = this.cwd(agent, repositoryId);
+    const path = this.cwd(agent, repositoryId, provision);
     const dependencies = command
       ? this.assignment(agent.id).repositoryIds.map((id) =>
           this.workspacePath(agent, id),

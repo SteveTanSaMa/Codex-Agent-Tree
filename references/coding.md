@@ -140,3 +140,18 @@ Messages still require `agent_ack`. Idle/processed messages do not imply the cod
 4. Review/salvage the preserved files as an explicit patch. This Beta has no command that safely adopts an unmarked worktree into the same Agent. Restart the original team, intentionally terminate the failed member, and ask its parent for a replacement **only if existing lifetime limits permit**; review the salvaged patch before applying it to the replacement. If limits are exhausted, report that state and require an explicit operator decision; do not silently create another tree to evade limits.
 
 The original directory and Git administrative entry remain preserved for inspection. Cleanup or removal is a separate intentional operator action after the changes have been secured. Do not manufacture a ready marker or retire/rebind a live or unknown native Thread. Restoring an intact matching backup is another option, but reconcile any intervening native work before scheduling.
+
+
+## Explicit macOS development resources (Beta 4 candidate)
+
+Use the existing named readOnlyResources for narrowly selected SDKs, framework/tool directories, package caches and fixture datasets. They remain read-only even during commands; state, auth/config paths and workspace separation checks remain enforced. Keep a test's absolute executable and fixed argv in the operator-authored test allowlist. Missing SDK/environment access should be diagnosed before changing the configuration.
+
+Network access defaults to denied. A named test may opt into at most eight fixed loopback TCP endpoints:
+
+```json
+{"integration":{"executable":"/absolute/path/to/node","args":["test/integration.mjs"],"networkEndpoints":[{"address":"127.0.0.1","port":5432}]}}
+```
+
+Only that named test gets the grant; model arguments cannot supply endpoints and Lead terminal remains network-denied. Seatbelt represents it as localhost plus the fixed port, covering loopback address families, not a remote hostname. Direct public-IP/domain allowlists, DNS grants and broad network access are not supported. External services require a separately operated local service/gateway with its own authorization; no gateway is started automatically. Credentials are not copied from the operator environment. This remains a trusted-local-repository macOS boundary, not isolation for malicious repositories. Linux/Windows coding support is not expanded.
+
+macOS 默认拒绝联网；只有操作者配置的命名测试可访问固定本地 TCP 端口，普通 terminal 不继承授权。SDK 与工具链可通过现有 `readOnlyResources` 最小范围授予只读访问。远程服务需另行管理的本地网关及其授权，本项目不自动启动网关或透传凭据；仍仅承诺可信本地仓库的 macOS 编码环境。

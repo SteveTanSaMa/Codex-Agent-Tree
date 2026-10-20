@@ -170,40 +170,57 @@ test(
         }) + "\n",
       );
       const boundary = body.indexOf(Buffer.from("中")) + 1;
-      const received = await new Promise<{ result: { description: string } }>(
-        (resolve, reject) => {
-          const socket = createConnection(join(state, "control.sock"));
-          socket.setEncoding("utf8");
-          let text = "";
-          const timer = setTimeout(
-            () => socket.destroy(new Error("fragmented request deadline")),
-            3000,
-          );
-          socket.once("connect", () => {
-            socket.write(body.subarray(0, boundary));
-            setTimeout(() => socket.write(body.subarray(boundary)), 30);
-          });
-          socket.on("data", (chunk) => {
-            text += chunk;
-            if (text.includes("\n")) {
-              clearTimeout(timer);
-              resolve(JSON.parse(text));
-              socket.end();
-            }
-          });
-          socket.once("error", (error) => {
+      const received = await new Promise<{
+        result: { id: string; description: string };
+      }>((resolve, reject) => {
+        const socket = createConnection(join(state, "control.sock"));
+        socket.setEncoding("utf8");
+        let text = "";
+        const timer = setTimeout(
+          () => socket.destroy(new Error("fragmented request deadline")),
+          3000,
+        );
+        socket.once("connect", () => {
+          socket.write(body.subarray(0, boundary));
+          setTimeout(() => socket.write(body.subarray(boundary)), 30);
+        });
+        socket.on("data", (chunk) => {
+          text += chunk;
+          if (text.includes("\n")) {
             clearTimeout(timer);
-            reject(error);
-          });
-        },
-      );
+            resolve(JSON.parse(text));
+            socket.end();
+          }
+        });
+        socket.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
       assert.equal(received.result.description, descriptionUtf8);
       const beforeRestart = await call("view", "--target", root.id);
       await call("stop");
       await call("start");
       const after = await call("view", "--target", root.id);
       assert.equal(after.cursor, beforeRestart.cursor);
-      assert.equal((after.tasks as { id: string }[])[0]?.id, created.id);
+      assert.equal(
+        (after.tasks as { id: string }[])[0]?.id,
+        received.result.id,
+      );
+      const history = await call("task-history", "--target", root.id);
+      assert.ok(
+        (history.items as { id: string }[]).some(
+          (task) => task.id === created.id,
+        ),
+      );
+      assert.equal(
+        (
+          (await call("task-list", "--target", root.id)) as unknown as {
+            id: string;
+          }[]
+        )[0]?.id,
+        created.id,
+      );
       assert.equal(
         (after.agents as { desired: string; attemptCount: number }[])[0]
           ?.desired,

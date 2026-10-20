@@ -1,3 +1,4 @@
+import { handoff, previewHandoff } from "../workspace/handoff.ts";
 import {
   WorkspaceBroker,
   assertWorkspaceSeparation,
@@ -15,7 +16,12 @@ import {
   type Actor,
   type TreeLimits,
 } from "../storage/store.ts";
-import { AgentTreeError, requireCondition, integer } from "../core/errors.ts";
+import {
+  AgentTreeError,
+  requireCondition,
+  integer,
+  text,
+} from "../core/errors.ts";
 import { RpcFailure } from "../runtime/codex/vendor/jsonrpc-client.ts";
 import type { InteractionPolicy } from "../storage/interaction.ts";
 import {
@@ -198,7 +204,7 @@ export class Coordinator {
       this.ready = false;
       this.recordError(error);
       for (const a of this.store
-        .attempts()
+        .unsettledAttempts()
         .filter((a) => ["starting", "running"].includes(a.state)))
         this.store.uncertain(
           a.id,
@@ -301,7 +307,7 @@ export class Coordinator {
         .guidance(target)
         .find((g) => g.message_id === id)!;
     const active = this.store
-      .attempts(target)
+      .unsettledAttempts(target)
       .find((a) =>
         ["prepared", "starting", "running", "unknown"].includes(a.state),
       );
@@ -397,13 +403,13 @@ export class Coordinator {
               a.desired === "active" &&
               this.store.scopes.epoch(a.id).initialEnabled) ||
             this.store
-              .attempts(a.id)
+              .unsettledAttempts(a.id)
               .some((t) =>
                 ["prepared", "starting", "running", "unknown"].includes(
                   t.state,
                 ),
               ) ||
-            this.store.messages(a.id).some((m) => m.status === "queued"),
+            this.store.pendingMessages(a.id).length > 0,
         );
         const decision = this.store.interaction.evaluate(
           root.id,
@@ -511,15 +517,13 @@ export class Coordinator {
     if (agent.desired !== "active") return;
     if (this.store.scopes.blocked(agent.id)) return;
     const scopeGeneration = this.store.scopes.epoch(agent.id).generation;
-    const attempts = this.store.attempts(agent.id);
+    const attempts = this.store.unsettledAttempts(agent.id);
     if (
       attempts.some((a) => ["starting", "running", "unknown"].includes(a.state))
     )
       return;
     const prepared = attempts.find((a) => a.state === "prepared");
-    const pendingMessages = this.store
-      .messages(agent.id)
-      .filter((m) => m.status === "queued");
+    const pendingMessages = this.store.pendingMessages(agent.id);
     const queued: typeof pendingMessages = [];
     let encodedSize = 0;
     for (const message of pendingMessages) {
@@ -543,7 +547,8 @@ export class Coordinator {
     if (
       !prepared &&
       !queued.length &&
-      (attempts.length > 0 || !this.store.scopes.epoch(agent.id).initialEnabled)
+      (this.store.hasAttempts(agent.id) ||
+        !this.store.scopes.epoch(agent.id).initialEnabled)
     )
       return;
     try {
@@ -579,7 +584,7 @@ export class Coordinator {
       let attempt = prepared;
       if (!attempt) {
         const input = queued.length
-          ? `${attempts.length === 0 && this.store.scopes.epoch(agent.id).initialEnabled ? `Initial assignment: ${agent.task}\n` : ""}Incoming messages: ${JSON.stringify(queued.map((m) => ({ id: m.id, sender: m.sender_id, message: m.body })))}. Handle them, report to your parent if needed, and call agent_ack with their IDs. End this Turn without spawning unless the task explicitly requires it.`
+          ? `${!this.store.hasAttempts(agent.id) && this.store.scopes.epoch(agent.id).initialEnabled ? `Initial assignment: ${agent.task}\n` : ""}Incoming messages: ${JSON.stringify(queued.map((m) => ({ id: m.id, sender: m.sender_id, message: m.body })))}. Handle them, report to your parent if needed, and call agent_ack with their IDs. End this Turn without spawning unless the task explicitly requires it.`
           : agent.task;
         attempt = this.store.prepare(
           agent.id,
@@ -678,7 +683,7 @@ export class Coordinator {
       const threadId = protocolString(p.threadId);
       const turnId = protocolString(turn.id);
       const starting = this.store
-        .attempts()
+        .unsettledAttempts()
         .find((a) => a.thread_id === threadId && a.state === "starting");
       if (starting && !starting.turn_id) {
         // A start notification is not a reply to our request. Another client may
@@ -738,7 +743,7 @@ export class Coordinator {
         if (
           !this.completionRecovery.has(key) &&
           this.store
-            .attempts()
+            .unsettledAttempts()
             .some(
               (pending) =>
                 pending.thread_id === threadId &&
@@ -949,6 +954,26 @@ export class Coordinator {
           nativeCallId: p.callId ?? null,
           turnId,
         });
+      } else if (tool === "agent_handoff" || tool === "agent_handoff_preview") {
+        requireCondition(
+          this.workspace,
+          "FORBIDDEN",
+          "No coding workspace authorized",
+        );
+        output =
+          tool === "agent_handoff"
+            ? handoff(
+                this.store,
+                this.workspace,
+                actor.agentId,
+                record(p.arguments),
+              )
+            : previewHandoff(
+                this.store,
+                this.workspace,
+                actor.agentId,
+                text(record(p.arguments).id, "handoff ID", 128),
+              );
       } else if (tool === "agent_task_create") {
         output = this.store.tasks.create(actor, actor.agentId, p.arguments);
       } else if (tool === "agent_task_update") {
@@ -961,7 +986,7 @@ export class Coordinator {
         );
       } else if (tool === "agent_task_list") {
         listInput(p.arguments);
-        output = this.store.tasks.list(actor, actor.agentId);
+        output = this.store.tasks.activeList(actor, actor.agentId);
       } else if (tool === "agent_spawn") {
         const { requestKey, ...input } = spawnInput(p.arguments);
         const child = this.store.spawn(actor, requestKey, input);
@@ -1193,7 +1218,7 @@ export class Coordinator {
       reasons.push({ agentId: null, code: "tree-budget" });
     if (executionLimits.remainingTurns === 0)
       reasons.push({ agentId: null, code: "tree-turn-limit" });
-    const tasks = this.store.tasks.list(null, target);
+    const tasks = this.store.tasks.activeList(null, target);
     if (!progressPossible)
       reasons.push({
         agentId: null,
@@ -1427,7 +1452,7 @@ export class Coordinator {
         this.workspace?.cancel(a.id);
         attempts.push(
           ...this.store
-            .attempts(a.id)
+            .unsettledAttempts(a.id)
             .filter((t) =>
               ["starting", "running", "unknown"].includes(t.state),
             ),
@@ -1494,7 +1519,7 @@ export class Coordinator {
       const binding = this.store.binding(agent.id);
       if (!binding) continue;
       const outstanding = this.store
-        .attempts(agent.id)
+        .unsettledAttempts(agent.id)
         .filter((a) => ["starting", "running", "unknown"].includes(a.state));
       try {
         await this.runtime.resumeThread(binding.thread_id, this.cwd(agent.id));
@@ -1561,14 +1586,10 @@ export class Coordinator {
         }
         this.store.clearRecoveredRuntimeBlock(agent.id);
       } catch (error) {
-        const all = this.store.attempts(agent.id);
         if (
           !this.store.runtimeBlock(agent.id) &&
           !outstanding.length &&
-          all.every(
-            (a) =>
-              a.turn_id === null && ["prepared", "cancelled"].includes(a.state),
-          )
+          !this.store.hasDispatchedHistory(agent.id)
         ) {
           let live = false;
           try {

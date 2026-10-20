@@ -801,3 +801,136 @@ test("command effect is cached for the same native call ID; a new call ID intent
     f.close();
   }
 });
+
+test("tracked handoffs persist and preview clean/conflicting targets without merging", async () => {
+  const { handoff, previewHandoff } =
+    await import("../../src/workspace/handoff.ts");
+  const f = fixture();
+  try {
+    const child = f.broker.cwd(f.b);
+    writeFileSync(join(child, "sum.js"), "export const sum = (a,b) => a+b;\n");
+    const input = {
+      requestKey: "patch",
+      repositoryId: "default",
+      baseCommit: f.policy.baseCommit,
+      validation: "Declared: inspected patch; not independently verified",
+    };
+    const first = handoff(f.store, f.broker, f.b.id, input);
+    assert.equal(first.artifactKind, "tracked-patch");
+    assert.ok(first.patchSha256);
+    assert.deepEqual(handoff(f.store, f.broker, f.b.id, input), first);
+    const before = readFileSync(join(f.repo, "sum.js"), "utf8");
+    const preview = previewHandoff(f.store, f.broker, f.a.id, first.id);
+    assert.deepEqual(preview.issues, []);
+    assert.equal(preview.automaticMerge, false);
+    assert.equal(readFileSync(join(f.repo, "sum.js"), "utf8"), before);
+    writeFileSync(join(f.repo, "sum.js"), "conflicting target edit\n");
+    const dirty = previewHandoff(f.store, f.broker, f.a.id, first.id);
+    assert.ok(dirty.issues.includes("target-worktree-dirty"));
+    assert.ok(dirty.issues.includes("patch-does-not-apply-cleanly"));
+    const missing = handoff(f.store, f.broker, f.b.id, {
+      ...input,
+      requestKey: "dependency",
+      dependsOn: ["missing-handoff"],
+    });
+    assert.ok(
+      previewHandoff(f.store, f.broker, f.a.id, missing.id).issues.includes(
+        "missing-dependency:missing-handoff",
+      ),
+    );
+    assert.throws(
+      () =>
+        handoff(f.store, f.broker, f.b.id, { ...input, validation: "changed" }),
+      /changed content/,
+    );
+    writeFileSync(join(child, "untracked.txt"), "must not omit");
+    const bundle = handoff(f.store, f.broker, f.b.id, {
+      ...input,
+      requestKey: "untracked",
+    });
+    assert.equal(bundle.files[0]!.path, "untracked.txt");
+    assert.equal(bundle.files[0]!.content, "must not omit");
+    writeFileSync(join(f.repo, "untracked.txt"), "collision");
+    assert.ok(
+      previewHandoff(f.store, f.broker, f.a.id, bundle.id).issues.includes(
+        "new-file-collision:untracked.txt",
+      ),
+    );
+    assert.throws(
+      () => previewHandoff(f.store, f.broker, f.a.id, "unknown"),
+      /not found/,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("commit handoffs identify divergent targets and reject protected artifacts or cross-tree reads", async () => {
+  const { handoff, previewHandoff } =
+    await import("../../src/workspace/handoff.ts");
+  const f = fixture();
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-C",
+        cwd,
+        ...args,
+      ],
+      { encoding: "utf8" },
+    ).trim();
+  try {
+    const child = f.broker.cwd(f.b);
+    writeFileSync(join(child, "sum.js"), "export const sum = (a,b) => a+b;\n");
+    git(child, "add", ".");
+    git(child, "commit", "-m", "child change");
+    const commit = git(child, "rev-parse", "HEAD");
+    const input = {
+      requestKey: "commit",
+      repositoryId: "default",
+      baseCommit: f.policy.baseCommit,
+      commit,
+      validation: "Agent declaration only",
+    };
+    const record = handoff(f.store, f.broker, f.b.id, input);
+    writeFileSync(join(f.repo, "sum.js"), "export const sum = (a,b) => a*b;\n");
+    git(f.repo, "add", ".");
+    git(f.repo, "commit", "-m", "divergent lead");
+    const target = git(f.repo, "rev-parse", "HEAD");
+    const p = previewHandoff(f.store, f.broker, f.a.id, record.id);
+    assert.ok(p.issues.includes("target-baseline-changed"));
+    assert.ok(p.issues.includes("possible-merge-conflict"));
+    assert.equal(git(f.repo, "rev-parse", "HEAD"), target);
+    assert.equal(git(f.repo, "status", "--porcelain"), "");
+    const stranger = f.store.createRoot("Other", "work", {
+      tokens: 1000,
+      maxDepth: 1,
+      maxAgents: 1,
+      maxConcurrentTurns: 1,
+      maxTurnsPerAgent: 1,
+      turnReservation: 1,
+    });
+    assert.throws(
+      () => previewHandoff(f.store, f.broker, stranger.id, record.id),
+      /not found/,
+    );
+    writeFileSync(join(child, ".env"), "must-not-leak");
+    git(child, "add", ".env");
+    git(child, "commit", "-m", "protected fixture");
+    assert.throws(
+      () =>
+        handoff(f.store, f.broker, f.b.id, {
+          ...input,
+          requestKey: "protected",
+          commit: git(child, "rev-parse", "HEAD"),
+        }),
+      /protected/,
+    );
+  } finally {
+    f.close();
+  }
+});

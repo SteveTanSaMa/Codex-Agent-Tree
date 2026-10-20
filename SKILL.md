@@ -28,7 +28,7 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$STATE"
 
 ## Coding teams
 
-Use the coding workflow only for repository work authorized by the user. Keep state and runtime home outside the repository. Second-level worktrees start from the initialization commit; dependencies and ignored files are not copied. File writes can create missing parent directories within the workspace. Descendants cannot obtain terminal through a task or a prompt. Test commands are operator-authored fixed executable/argv entries, not model-supplied shell strings. Commands are sandboxed, network-disabled and bounded to 30 seconds; inspect failures instead of weakening permissions.
+Use the coding workflow only for repository work authorized by the user. Keep state and runtime home outside the repository. Second-level worktrees start from the initialization commit; dependencies and ignored files are not copied. File writes can create missing parent directories within the workspace. Descendants cannot obtain terminal through a task or a prompt. Test commands are operator-authored fixed executable/argv entries, not model-supplied shell strings. Commands are sandboxed and bounded to 30 seconds. Networking defaults to denied; an operator may allow fixed loopback TCP endpoints for a named test. Terminal receives no such grant; inspect failures instead of weakening permissions.
 
 Require coders to report actual diffs, worktree paths and test receipts. Lead reviews and integrates changes using `terminal`, then verifies in its own checkout. Third-level review is static unless the operator performs the test. On an uncertain command receipt, inspect its existing outcome; do not switch call IDs to bypass recovery. Retain worktrees until changes have been reviewed. See [coding operations](references/coding.md) for capabilities and limitations.
 
@@ -100,5 +100,7 @@ node "$SKILL_DIR/scripts/cat.mjs" control --state "$STATE" --target AGENT_ID --a
 ```
 
 Control defaults to the entire subtree; use `--scope agent` for one node. Pause drains running Turns and retains incoming messages. `cancel` requests interruption and cancels queued work; `terminate` is permanent. Apply the user's requested scope. Closing a CLI leaves the team running. `stop` detaches the Coordinator and leaves the dedicated native daemon and accepted work alive; `start` reconciles before scheduling again. See [operations](references/operations.md) before shutdown, recovery, or final usage settlement.
+
+Use `agent_handoff` to snapshot a commit or bounded patch/file bundle, and `agent_handoff_preview` to review it before integration. Completed tasks auto-archive; use task-get/history for retained results. For uncertain execution or incomplete worktrees, use the read-only `diagnose` command and the recovery procedure in operations.
 
 Report the outcome, stable Root ID, actual result or pending state, and material errors/budget limitations. Do not describe accepted work as completed.

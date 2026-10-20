@@ -438,7 +438,7 @@ test("schema 4 upgrades to task storage without changing existing native identit
       assert.equal(
         reopened.db.prepare("SELECT version FROM schema_version").get()
           ?.version,
-        13,
+        14,
       );
       assert.deepEqual(reopened.binding(f.root.id), binding);
       assert.deepEqual(reopened.budgetStatus(f.root.tree_id), budget);
@@ -475,6 +475,130 @@ test("soak task archival sustains more than 256 complete lifecycles without rais
         );
       }
     }
+  } finally {
+    f.close();
+  }
+});
+
+test("completion automatically archives beyond active capacity, preserves dependency readiness and request receipts", () => {
+  const f = fixture();
+  try {
+    let last;
+    for (let i = 0; i < 300; i++) {
+      let t = f.store.tasks.create(f.a, f.root.id, input("auto-" + i));
+      t = f.store.tasks.update(f.a, f.root.id, {
+        taskId: t.id,
+        requestKey: "claim-" + i,
+        expectedRevision: t.revision,
+        action: "claim",
+      });
+      const done = {
+        taskId: t.id,
+        requestKey: "done-" + i,
+        expectedRevision: t.revision,
+        action: "complete",
+        result: "verified",
+      };
+      t = f.store.tasks.update(f.a, f.root.id, done);
+      assert.ok(t.archivedAt);
+      assert.equal(t.status, "completed");
+      assert.deepEqual(f.store.tasks.update(f.a, f.root.id, done), t);
+      last = t;
+    }
+    assert.equal(f.store.tasks.activeList(f.a, f.root.id).length, 0);
+    assert.equal(f.store.tasks.list(f.a, f.root.id).length, 300);
+    const dep = f.store.tasks.create(f.a, f.root.id, {
+      ...input("dependent"),
+      blockedBy: [last!.id],
+    });
+    assert.equal(dep.ready, true);
+    const page = f.store.tasks.page(f.a, f.root.id, 0, 50, true);
+    assert.equal(page.items.length, 50);
+    assert.ok(page.nextCursor);
+    const second = f.store.tasks.page(
+      f.a,
+      f.root.id,
+      page.nextCursor!,
+      50,
+      true,
+    );
+    assert.ok(!second.items.some((t) => page.items.some((p) => p.id === t.id)));
+    const reopened = f.store.tasks.update(f.a, f.root.id, {
+      taskId: last!.id,
+      requestKey: "reopen-archived",
+      expectedRevision: last!.revision,
+      action: "reopen",
+    });
+    assert.equal(reopened.archivedAt, undefined);
+    assert.equal(f.store.tasks.get(f.a, f.root.id, dep.id).ready, false);
+  } finally {
+    f.close();
+  }
+});
+
+test("active task capacity is enforced on create and reopen; completing work frees it without deletion", () => {
+  const f = fixture();
+  try {
+    let archived = f.store.tasks.create(f.a, f.root.id, input("archived"));
+    archived = f.store.tasks.update(f.a, f.root.id, {
+      requestKey: "ac",
+      taskId: archived.id,
+      expectedRevision: archived.revision,
+      action: "claim",
+    });
+    archived = f.store.tasks.update(f.a, f.root.id, {
+      requestKey: "ad",
+      taskId: archived.id,
+      expectedRevision: archived.revision,
+      action: "complete",
+      result: "done",
+    });
+    const pending = [];
+    for (let i = 0; i < 256; i++)
+      pending.push(
+        f.store.tasks.create(f.a, f.root.id, input("capacity-" + i)),
+      );
+    assert.throws(
+      () => f.store.tasks.create(f.a, f.root.id, input("overflow")),
+      /active task limit/,
+    );
+    assert.throws(
+      () =>
+        f.store.tasks.update(f.a, f.root.id, {
+          requestKey: "reopen-full",
+          taskId: archived.id,
+          expectedRevision: archived.revision,
+          action: "reopen",
+        }),
+      /active task limit/,
+    );
+    assert.equal(
+      f.store.tasks.get(f.a, f.root.id, archived.id).status,
+      "completed",
+    );
+    let first = pending[0]!;
+    first = f.store.tasks.update(f.a, f.root.id, {
+      requestKey: "pc",
+      taskId: first.id,
+      expectedRevision: first.revision,
+      action: "claim",
+    });
+    f.store.tasks.update(f.a, f.root.id, {
+      requestKey: "pd",
+      taskId: first.id,
+      expectedRevision: first.revision,
+      action: "complete",
+      result: "done",
+    });
+    assert.equal(
+      f.store.tasks.update(f.a, f.root.id, {
+        requestKey: "reopen-full",
+        taskId: archived.id,
+        expectedRevision: archived.revision,
+        action: "reopen",
+      }).status,
+      "pending",
+    );
   } finally {
     f.close();
   }

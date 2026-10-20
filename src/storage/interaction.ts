@@ -53,7 +53,7 @@ interface Context {
   db: DatabaseSync;
   transact<T>(fn: () => T): T;
   agent(id: string): Agent;
-  attempts(id: string): Attempt[];
+  attempt(id: string): Attempt;
   event(agent: Agent, kind: string, body: unknown): void;
 }
 export interface Guidance {
@@ -153,7 +153,7 @@ export class InteractionState {
   claim(id: string, attempt: Attempt) {
     return this.c.transact(() => {
       const a = this.c.agent(attempt.agent_id);
-      const current = this.c.attempts(a.id).find((t) => t.id === attempt.id);
+      const current = this.c.attempt(attempt.id);
       requireCondition(
         !this.c.db
           .prepare("SELECT agent_id FROM runtime_blocks WHERE agent_id=?")
@@ -163,7 +163,8 @@ export class InteractionState {
       );
       requireCondition(
         a.desired === "active" &&
-          current?.state === "running" &&
+          current.agent_id === a.id &&
+          current.state === "running" &&
           current.turn_id === attempt.turn_id,
         "STATE_BLOCKED",
         "Guidance requires the current running Turn",

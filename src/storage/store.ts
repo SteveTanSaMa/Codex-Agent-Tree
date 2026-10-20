@@ -167,7 +167,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -284,7 +284,17 @@ export class Store {
       this.db.exec(workScopeSchema);
       if (Number(this.one("SELECT version FROM schema_version")?.version) < 13)
         backfillWorkScopes(this.db);
-      this.run("UPDATE schema_version SET version=13");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS handoffs(id TEXT PRIMARY KEY,tree_id TEXT NOT NULL REFERENCES trees(id),agent_id TEXT NOT NULL REFERENCES agents(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,body TEXT NOT NULL,UNIQUE(agent_id,request_key));
+        CREATE TABLE IF NOT EXISTS task_archives(task_id TEXT PRIMARY KEY REFERENCES tasks(id),archived_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS task_active_tree ON tasks(tree_id,status,id);
+        CREATE INDEX IF NOT EXISTS task_dependency_reverse ON task_dependencies(depends_on,task_id);
+      `);
+      if (Number(this.one("SELECT version FROM schema_version")?.version) < 14)
+        this.db.exec(
+          "INSERT OR IGNORE INTO task_archives SELECT id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM tasks WHERE status='completed'",
+        );
+      this.run("UPDATE schema_version SET version=14");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -342,7 +352,7 @@ export class Store {
       db: this.db,
       transact: (operation) => this.transaction(operation),
       agent: (id) => this.agent(id),
-      attempts: (id) => this.attempts(id),
+      attempt: (id) => this.attempt(id),
       event: (agent, kind, body) => this.event(agent, kind, body),
     });
     this.interaction.recover();
@@ -776,7 +786,7 @@ export class Store {
     return this.transaction(() => {
       const agent = this.agent(agentId);
       requireCondition(
-        !this.attempts(agentId).some((t) =>
+        !this.unsettledAttempts(agentId).some((t) =>
           ["prepared", "starting", "running", "unknown"].includes(t.state),
         ) && !this.runtimeBlock(agentId),
         "STATE_BLOCKED",
@@ -1212,10 +1222,7 @@ export class Store {
         "Unowned native execution is quarantined",
       );
       requireCondition(
-        this.attempts(agentId).every(
-          (a) =>
-            a.turn_id === null && ["prepared", "cancelled"].includes(a.state),
-        ),
+        !this.hasDispatchedHistory(agentId),
         "STATE_BLOCKED",
         "A dispatched Session cannot be retired as empty",
       );
@@ -1276,6 +1283,36 @@ export class Store {
       return id;
     });
   }
+  pendingMessages(agentId: string): Message[] {
+    return this.all(
+      `SELECT * FROM (
+      SELECT m.*,o.sequence AS enqueue_sequence,'agent' AS origin FROM messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=? AND status='queued'
+      UNION ALL
+      SELECT m.id,NULL AS sender_id,m.recipient_id,m.body,m.status,m.attempt_id,m.created_at,m.processed_at,o.sequence AS enqueue_sequence,'human' AS origin FROM operator_messages m JOIN message_order o ON o.message_id=m.id WHERE recipient_id=? AND status='queued'
+    ) ORDER BY enqueue_sequence`,
+      agentId,
+      agentId,
+    ) as unknown as Message[];
+  }
+  hasAttempts(agentId: string) {
+    return Boolean(
+      this.one("SELECT 1 FROM turn_attempts WHERE agent_id=? LIMIT 1", agentId),
+    );
+  }
+  hasDispatchedHistory(agentId: string) {
+    return Boolean(
+      this.one(
+        "SELECT 1 FROM turn_attempts WHERE agent_id=? AND (turn_id IS NOT NULL OR state NOT IN ('prepared','cancelled')) LIMIT 1",
+        agentId,
+      ),
+    );
+  }
+  unsettledAttempts(agentId?: string): Attempt[] {
+    return this.all(
+      `SELECT * FROM turn_attempts INDEXED BY active_agent_attempt WHERE state IN ('prepared','starting','running','unknown') ${agentId ? "AND agent_id=?" : ""} ORDER BY created_at,id`,
+      ...(agentId ? [agentId] : []),
+    ) as unknown as Attempt[];
+  }
   messages(agentId: string, limit?: number): Message[] {
     this.agent(agentId);
     if (limit !== undefined) {
@@ -1325,7 +1362,9 @@ export class Store {
     text(reason, "delivery failure reason", 2048);
     this.transaction(() => {
       const agent = this.agent(agentId);
-      const message = this.messages(agentId).find((m) => m.id === messageId);
+      const message = this.pendingMessages(agentId).find(
+        (m) => m.id === messageId,
+      );
       requireCondition(
         message?.status === "queued",
         "CONFLICT",
@@ -1397,7 +1436,7 @@ export class Store {
         "STATE_BLOCKED",
         "Agent has live or uncertain execution",
       );
-      const pending = this.messages(agentId).filter(
+      const pending = this.pendingMessages(agentId).filter(
         (m) => m.status === "queued",
       );
       const deliveries = [...new Set(deliveryIds ?? pending.map((m) => m.id))];
@@ -1793,7 +1832,7 @@ export class Store {
           previous.id,
         );
         if (desired === "cancelled" || desired === "terminated") {
-          for (const a of this.attempts(previous.id).filter(
+          for (const a of this.unsettledAttempts(previous.id).filter(
             (a) => a.state === "prepared",
           )) {
             this.run(
@@ -1830,7 +1869,7 @@ export class Store {
       // Drain is the pause default. Cancel/terminate require runtime interruption, not a fictitious terminal status.
       return action === "cancel" || action === "terminate"
         ? targets.flatMap((a) =>
-            this.attempts(a.id).filter((t) =>
+            this.unsettledAttempts(a.id).filter((t) =>
               ["starting", "running", "unknown"].includes(t.state),
             ),
           )
@@ -1844,7 +1883,7 @@ export class Store {
       agent.desired !== "terminated" ||
       !agent.parent_id ||
       agent.reserved > 0 ||
-      this.attempts(agentId).some((a) =>
+      this.unsettledAttempts(agentId).some((a) =>
         ["prepared", "starting", "running", "unknown"].includes(a.state),
       )
     )
@@ -2025,6 +2064,49 @@ export class Store {
       "SELECT * FROM session_observations WHERE agent_id=?",
       agentId,
     );
+  }
+  saveHandoff(
+    agentId: string,
+    key: string,
+    fingerprint: string,
+    body: { id: string; treeId: string; repositoryId: string; commit?: string },
+  ) {
+    return this.transaction(() => {
+      const old = this.one(
+        "SELECT fingerprint,body FROM handoffs WHERE agent_id=? AND request_key=?",
+        agentId,
+        key,
+      );
+      if (old) {
+        requireCondition(
+          old.fingerprint === fingerprint,
+          "CONFLICT",
+          "Handoff request key changed content",
+        );
+        return JSON.parse(String(old.body));
+      }
+      const agent = this.agent(agentId);
+      requireCondition(
+        agent.tree_id === body.treeId,
+        "FORBIDDEN",
+        "Handoff outside caller tree",
+      );
+      this.run(
+        "INSERT INTO handoffs VALUES(?,?,?,?,?,?)",
+        body.id,
+        body.treeId,
+        agentId,
+        key,
+        fingerprint,
+        JSON.stringify(body),
+      );
+      this.event(agent, "handoff.recorded", {
+        handoffId: body.id,
+        repositoryId: body.repositoryId,
+        commit: body.commit ?? null,
+      });
+      return body;
+    });
   }
   note(
     agentId: string,

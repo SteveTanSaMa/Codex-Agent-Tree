@@ -27,6 +27,7 @@ export interface Task {
   ready: boolean;
   writeScopeWarnings: string[];
   withdrawnBy?: string;
+  archivedAt?: string;
 }
 function fields(value: unknown, allowed: string[]): Record<string, unknown> {
   requireCondition(

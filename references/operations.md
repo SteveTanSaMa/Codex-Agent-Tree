@@ -31,7 +31,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `--target` selects a tree and, for operator-created/claimed work, the represented Agent. Model tools derive identity from the authenticated Thread/Turn; no caller ID is accepted. `agent_task_create/get/list/update` expose the same domain operations on newly created Threads. Existing Threads keep their original native tool catalog; use the operator CLI or continue their message workflow rather than replacing bindings.
 
-Creation accepts `--blocked-by '["TASK_ID"]'` and `--write-scopes '["src"]'`. Create/update alternatively accept `--input-file /absolute/path/input.json` with tool-shaped fields (`requestKey`, `taskId`, `expectedRevision`, `action`, etc.); do not mix file input with field flags. No shell evaluation is performed on file contents. There are at most 256 nondeleted tasks per tree, 32 blockers and 16 relative scope prefixes per task; subject is limited to 200, description/result to 8000 UTF-16 code units. Scope overlap warnings are advisory, with no filesystem locking or write authority.
+Creation accepts `--blocked-by '["TASK_ID"]'` and `--write-scopes '["src"]'`. Create/update alternatively accept `--input-file /absolute/path/input.json` with tool-shaped fields (`requestKey`, `taskId`, `expectedRevision`, `action`, etc.); do not mix file input with field flags. No shell evaluation is performed on file contents. There are at most 256 active (pending/in-progress) tasks per tree, 32 blockers and 16 relative scope prefixes per task; subject is limited to 200, description/result to 8000 UTF-16 code units. Scope overlap warnings are advisory, with no filesystem locking or write authority.
 
 Every mutation requires a request key, scoped to tree and caller. Retrying identical input/key returns the original response snapshot without another event; changed input with that key is rejected. Every update requires the current revision (CLI `--revision`, tool `expectedRevision`). On `STALE_REVISION`, fetch current state and reconsider the mutation before submitting a new operation. An idempotent replay may contain an old revision or derived `ready`; use `task-get` for current state.
 
@@ -115,7 +115,7 @@ The coding runtime targets macOS arm64, Node ≥26.3.1 and one credential domain
 
 Beta 3 upgrades to schema 13, adding durable work-scope epochs and replacement receipts alongside an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Beta 2 and older source refuse schema 13. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Beta 4 candidate uses schema 14; Beta 3 and older source refuse the upgraded database. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Changing the Codex executable
 
@@ -216,3 +216,24 @@ Managed `agent_status`, `agent_list` and control responses use tool contract v2:
 Managed Attempt results are previews capped at 2,000 characters with `resultTruncated`; operator status retains the original result. Budget diagnostics list at most 100 unknown-usage Attempt IDs, with the full `unknownUsageAttemptCount` and `unknownUsageTruncated` flag. Liability and admission still use the complete accounting state; the preview limit does not settle or discard unknown costs. Retained events provide the complete Attempt trace.
 
 范围替换为操作者专用：使用当前代际和固定 key 提交，旧队列被撤销，旧执行先中断/对账，新工作随后准入。子节点等待新分配，人工暂停、永久终止、历史计数和未知用量均不重置。`ready` 表示排空完成，不表示业务任务完成；`reviewed-unknown` 只是人工确认已检查未知命令，不是成功收据，也不允许重放。
+
+
+## Beta 4 candidate: archive, diagnosis and handoff
+
+Completion automatically archives a task in the same transaction. `status` remains `completed`; `archivedAt` is separate metadata, not a deletion. Completed blockers still satisfy dependencies. Reopen clears archive metadata and consumes active capacity; it fails at 256 active tasks or when started dependents require the completed result. Migration archives legacy completed tasks at migration time without changing their updatedAt, historical receipts or events. Old idempotency keys return their original response; use task-get for current state.
+
+`agent_task_list` and view show the active board (up to the existing 256-task limit). Legacy operator task-list retains its nondeleted-history array. Use bounded history with `task-history --target ID --after 0 --limit 50`; follow nextCursor until null. task-get includes archives and tombstones. Never delete evidence merely to free capacity.
+
+`diagnose --state DIR` opens SQLite read-only, acquires no Coordinator lease, performs no migration, and reports unknown Attempts/commands, evidence locations and worktree marker gaps. Keep a backup. For unknown execution, compare native-history Turn IDs and attempt markers, then reconnect/start for conservative reconciliation. Ambiguous outcomes stay unknown; neither usage settlement nor release-quarantine proves execution completion. For command receipts, inspect processes, diffs and output before explicit command-review with a factual reason; it records uncertainty and never reruns the command. For incomplete worktrees, preserve tracked diffs and untracked files, compare `git worktree list --porcelain` with config.json and completion markers, and provision a fresh authorized workspace for reviewed transfer. No automatic marker repair or identity adoption is supported.
+
+`handoff-record --target SOURCE_ID --input-file JSON` and `handoff-preview --target LEAD_ID --id ID` use the authenticated control channel. Model tools are agent_handoff and agent_handoff_preview. Record repositoryId, full baseCommit, optional full commit, dependsOn handoff IDs and a validation declaration. Omitting commit snapshots the tracked diff plus up to 16 regular UTF-8 untracked files, combined content up to 64 KiB. Protected paths, symlinks, hardlinks and oversized untracked files are rejected. Use a committed handoff for larger/binary assets. A commit handoff requires clean source HEAD matching the recorded commit and baseline ancestry.
+
+Preview checks changed target baseline, source scope generation, dirty target, dependencies and possible merge conflicts or patch applicability; file bundles also report name collisions. Validation is explicitly agent-declared, not independently certified. Review the immutable artifact, integrate through an explicitly authorized Lead operation, then run target tests. Preview never merges, applies or provisions a missing worktree; Git inspection uses a private sandbox profile. Patch dependencies require manual verification. Cross-repository steps are independent commits, not an atomic transaction. Existing Threads keep their original native tool catalog; operator CLI commands work without rebinding business identity, while new Threads receive new tools.
+
+交接输入示例 / Handoff input example (omit `commit` to capture a bounded patch):
+
+```json
+{"requestKey":"module-v1","repositoryId":"app","baseCommit":"FULL_BASE_SHA","commit":"FULL_CHANGE_SHA","dependsOn":[],"validation":"Declared: unit tests passed; evidence path and command"}
+```
+
+完成自动归档、重新打开占用容量；历史和删除记录用分页查询。诊断只读且不迁移，不把未知结果当成失败后可重试。交接预览不应用补丁、不合并；Lead 需审查依赖、基线和冲突后显式整合并独立验证。升级 schema 14 前备份整个 state，降级恢复旧备份；已有 Thread 不会自动换工具目录。

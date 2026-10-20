@@ -44,23 +44,33 @@ export class TaskBoard {
       actorKey: actor ? `agent:${caller.id}` : "human",
     };
   }
-  private rows(treeId: string): Task[] {
+  private rows(treeId: string, roots: string[] = [], history = false): Task[] {
     const db = this.context.db;
+    // Only active tasks plus the required dependency closure participate in mutations.
+    const cte = `WITH RECURSIVE chosen(id) AS (
+      SELECT id FROM tasks WHERE tree_id=? AND ${history ? "1" : "status IN ('pending','in_progress')"}
+      UNION SELECT id FROM tasks INDEXED BY sqlite_autoindex_tasks_1 WHERE id IN (SELECT value FROM json_each(?)) AND tree_id=?
+      UNION SELECT d.depends_on FROM chosen c CROSS JOIN task_dependencies d ON c.id=d.task_id CROSS JOIN tasks t ON t.id=d.depends_on WHERE t.tree_id=?
+    ) `;
+    const params = [treeId, JSON.stringify(roots), treeId, treeId];
     const rows = db
       .prepare(
-        "SELECT t.*,i.replacement_id AS withdrawn_by FROM tasks t LEFT JOIN scope_invalid_tasks i ON i.task_id=t.id WHERE t.tree_id=? ORDER BY t.created_at,t.id",
+        cte +
+          "SELECT t.*,i.replacement_id AS withdrawn_by,a.archived_at FROM chosen c CROSS JOIN tasks t ON t.id=c.id LEFT JOIN scope_invalid_tasks i ON i.task_id=t.id LEFT JOIN task_archives a ON a.task_id=t.id ORDER BY t.created_at,t.id",
       )
-      .all(treeId) as Row[];
+      .all(...params) as Row[];
     const deps = db
       .prepare(
-        "SELECT d.* FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE t.tree_id=? ORDER BY d.depends_on",
+        cte +
+          "SELECT d.* FROM chosen c CROSS JOIN task_dependencies d ON c.id=d.task_id ORDER BY d.depends_on",
       )
-      .all(treeId) as Row[];
+      .all(...params) as Row[];
     const scopes = db
       .prepare(
-        "SELECT s.* FROM task_scopes s JOIN tasks t ON t.id=s.task_id WHERE t.tree_id=? ORDER BY s.scope",
+        cte +
+          "SELECT s.* FROM chosen c CROSS JOIN task_scopes s ON c.id=s.task_id ORDER BY s.scope",
       )
-      .all(treeId) as Row[];
+      .all(...params) as Row[];
     const grouped = (values: Row[], field: string) => {
       const result = new Map<string, string[]>();
       for (const row of values) {
@@ -89,6 +99,7 @@ export class TaskBoard {
       writeScopes: writeScopes.get(String(r.id)) ?? [],
       ready: false,
       writeScopeWarnings: [],
+      ...(r.archived_at == null ? {} : { archivedAt: String(r.archived_at) }),
       ...(r.withdrawn_by === null || r.withdrawn_by === undefined
         ? {}
         : { withdrawnBy: String(r.withdrawn_by) }),
@@ -139,14 +150,58 @@ export class TaskBoard {
   }
   get(actor: Actor | null, target: string, id: string): Task {
     const { treeId } = this.caller(actor, target);
-    const task = this.rows(treeId).find((t) => t.id === id);
+    const task = this.rows(treeId, [id]).find((t) => t.id === id);
     requireCondition(task, "NOT_FOUND", "Task not found in caller tree");
     return task;
   }
   list(actor: Actor | null, target: string) {
-    return this.rows(this.caller(actor, target).treeId)
+    return this.rows(this.caller(actor, target).treeId, [], true)
       .filter((t) => t.status !== "deleted")
       .map(taskSummary);
+  }
+  activeList(actor: Actor | null, target: string) {
+    return this.rows(this.caller(actor, target).treeId)
+      .filter((t) => ["pending", "in_progress"].includes(t.status))
+      .map(taskSummary);
+  }
+  page(
+    actor: Actor | null,
+    target: string,
+    after = 0,
+    limit = 50,
+    history = false,
+  ) {
+    requireCondition(
+      Number.isSafeInteger(after) &&
+        after >= 0 &&
+        Number.isSafeInteger(limit) &&
+        limit >= 1 &&
+        limit <= 100,
+      "INVALID_INPUT",
+      "Invalid task page",
+    );
+    const { treeId } = this.caller(actor, target);
+    const rows = this.context.db
+      .prepare(
+        `SELECT rowid AS cursor,id FROM tasks WHERE tree_id=? AND rowid>? AND ${history ? "1" : "status IN ('pending','in_progress')"} ORDER BY rowid LIMIT ?`,
+      )
+      .all(treeId, after, limit + 1) as Row[];
+    const selected = rows.slice(0, limit);
+    const projected = new Map(
+      this.rows(
+        treeId,
+        selected.map((r) => String(r.id)),
+      ).map((task) => [task.id, task]),
+    );
+    return {
+      items: selected.map((r) => projected.get(String(r.id))!),
+      nextCursor: rows.length > limit ? Number(selected.at(-1)!.cursor) : null,
+      counts: this.context.db
+        .prepare(
+          "SELECT status,COUNT(*) AS count FROM tasks WHERE tree_id=? GROUP BY status",
+        )
+        .all(treeId),
+    };
   }
   private previous(
     treeId: string,
@@ -205,11 +260,12 @@ export class TaskBoard {
         input,
       });
       if (prior) return prior;
-      const all = this.rows(treeId);
+      const all = this.rows(treeId, input.blockedBy);
       requireCondition(
-        all.filter((t) => t.status !== "deleted").length < 256,
+        all.filter((t) => ["pending", "in_progress"].includes(t.status))
+          .length < 256,
         "STATE_BLOCKED",
-        "Tree task limit 256 reached",
+        "Tree active task limit 256 reached",
       );
       const time = new Date().toISOString();
       const task: Task = {
@@ -283,7 +339,10 @@ export class TaskBoard {
         input,
       });
       if (prior) return prior;
-      const all = this.rows(treeId);
+      const all = this.rows(treeId, [
+        input.taskId,
+        ...("blockedBy" in input ? input.blockedBy : []),
+      ]);
       const task = all.find((t) => t.id === input.taskId);
       requireCondition(task, "NOT_FOUND", "Task not found in caller tree");
       requireCondition(
@@ -315,8 +374,9 @@ export class TaskBoard {
         revision: task.revision + 1,
         updatedAt: new Date().toISOString(),
       };
+      const byId = new Map(all.map((t) => [t.id, t]));
       const ready = task.blockedBy.every(
-        (id) => all.find((t) => t.id === id)?.status === "completed",
+        (id) => byId.get(id)?.status === "completed",
       );
       switch (input.action) {
         case "claim":
@@ -377,13 +437,19 @@ export class TaskBoard {
             "Only completed tasks can reopen",
           );
           requireCondition(
-            !all.some(
-              (t) =>
-                t.blockedBy.includes(task.id) &&
-                ["in_progress", "completed"].includes(t.status),
-            ),
+            !this.context.db
+              .prepare(
+                "SELECT 1 FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE d.depends_on=? AND t.status IN ('in_progress','completed') LIMIT 1",
+              )
+              .get(task.id),
             "STATE_BLOCKED",
             "Release or reopen started dependents first",
+          );
+          requireCondition(
+            all.filter((t) => ["pending", "in_progress"].includes(t.status))
+              .length < 256,
+            "STATE_BLOCKED",
+            "Tree active task limit 256 reached",
           );
           next.status = "pending";
           next.ownerId = null;
@@ -411,6 +477,15 @@ export class TaskBoard {
           next.blockedBy = (input as { blockedBy: string[] }).blockedBy;
           break;
         case "delete":
+          requireCondition(
+            !this.context.db
+              .prepare(
+                "SELECT 1 FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE d.depends_on=? AND t.status!='deleted' LIMIT 1",
+              )
+              .get(task.id),
+            "INVALID_INPUT",
+            "Task cannot be deleted: required by a retained dependent",
+          );
           next.status = "deleted";
           break;
       }
@@ -431,6 +506,19 @@ export class TaskBoard {
           task.revision,
         );
       this.relatedRows(next);
+      if (input.action === "complete") {
+        this.context.db
+          .prepare("INSERT OR REPLACE INTO task_archives VALUES(?,?)")
+          .run(task.id, next.updatedAt);
+        this.context.event(caller, "task.archived", {
+          taskId: task.id,
+          reason: "completed",
+          archivedAt: next.updatedAt,
+        });
+      } else if (input.action === "reopen")
+        this.context.db
+          .prepare("DELETE FROM task_archives WHERE task_id=?")
+          .run(task.id);
       const result = this.get(actor, target, task.id);
       this.save(
         treeId,

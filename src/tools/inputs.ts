@@ -139,6 +139,25 @@ function tool(
 }
 export const agentTools: DynamicTool[] = [
   tool(
+    "agent_handoff",
+    "Record a commit handoff, or omit commit to snapshot a tracked patch; validation is a declaration, not independent proof.",
+    {
+      requestKey: string,
+      repositoryId: string,
+      baseCommit: string,
+      commit: string,
+      dependsOn: { type: "array", items: string, maxItems: 32 },
+      validation: string,
+    },
+    ["requestKey", "repositoryId", "baseCommit", "validation"],
+  ),
+  tool(
+    "agent_handoff_preview",
+    "Read-only baseline, dependency and conflict preview; never merges.",
+    { id: string },
+    ["id"],
+  ),
+  tool(
     "agent_task_create",
     "Create an unowned persistent task in your tree. Use a stable requestKey for retries. Dependencies must complete before claim; ready never dispatches an Agent automatically.",
     {
@@ -158,7 +177,7 @@ export const agentTools: DynamicTool[] = [
   ),
   tool(
     "agent_task_list",
-    "Read compact task summaries in your tree. Use agent_task_get for full input and result. Processed messages and idle Agents do not imply completed tasks.",
+    "Read active task summaries in your tree; completed tasks auto-archive. Use agent_task_get for historical input and result. Processed messages and idle Agents do not imply completed tasks.",
     {},
     [],
   ),

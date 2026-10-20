@@ -410,7 +410,7 @@ test(
       try {
         assert.equal(
           db.prepare("SELECT version FROM schema_version").get()!.version,
-          13,
+          14,
         );
         assert.equal(
           db.prepare("PRAGMA integrity_check").get()!.integrity_check,
