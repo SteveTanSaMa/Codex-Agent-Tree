@@ -150,7 +150,7 @@ test("schema 13 completed tasks gain archive metadata without rewriting receipts
     s = new Store(path);
     assert.equal(
       s.db.prepare("SELECT version FROM schema_version").get()!.version,
-      14,
+      15,
     );
     assert.ok(s.tasks.get(null, root.id, t.id).archivedAt);
     assert.equal(

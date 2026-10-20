@@ -270,7 +270,7 @@ test("legacy schema 5 trees retain enforcement and derived lifetime bounds witho
     assert.equal(f.store.attempt(a.attempt.id).turn_id, a.actor.turnId);
     assert.equal(
       f.store.db.prepare("SELECT version FROM schema_version").get()?.version,
-      14,
+      15,
     );
     assert.equal(f.store.executionStatus(root.tree_id).usedTurns, 1);
   } finally {

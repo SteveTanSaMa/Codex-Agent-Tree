@@ -104,3 +104,5 @@ Control defaults to the entire subtree; use `--scope agent` for one node. Pause 
 Use `agent_handoff` to snapshot a commit or bounded patch/file bundle, and `agent_handoff_preview` to review it before integration. Completed tasks auto-archive; use task-get/history for retained results. For uncertain execution or incomplete worktrees, use the read-only `diagnose` command and the recovery procedure in operations.
 
 Report the outcome, stable Root ID, actual result or pending state, and material errors/budget limitations. Do not describe accepted work as completed.
+
+For upgrade preflight, verified stopped backups, capacity warnings, paged audit export and explicit integration receipts, read [maintenance and durable handoff](docs/maintenance-and-handoff.md). Preserve unknown outcomes; declared integration success is not host-certified verification.

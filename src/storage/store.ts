@@ -87,6 +87,7 @@ export interface Attempt {
   owner_generation: number;
   trigger_id: string | null;
 }
+export const BUSINESS_SCHEMA_VERSION = 15;
 const activeAttempts = "('prepared','starting','running','unknown')";
 const now = () => new Date().toISOString();
 const fingerprint = (value: unknown) =>
@@ -167,7 +168,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_requests(tree_id TEXT NOT NULL REFERENCES trees(id), actor_key TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, PRIMARY KEY(tree_id,actor_key,request_key));
       `);
       requireCondition(
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(
           Number(this.one("SELECT version FROM schema_version")?.version),
         ),
         "CONFLICT",
@@ -285,6 +286,8 @@ export class Store {
       if (Number(this.one("SELECT version FROM schema_version")?.version) < 13)
         backfillWorkScopes(this.db);
       this.db.exec(`
+        CREATE TABLE IF NOT EXISTS integration_results(id TEXT PRIMARY KEY,tree_id TEXT NOT NULL REFERENCES trees(id),agent_id TEXT NOT NULL REFERENCES agents(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,body TEXT NOT NULL,UNIQUE(agent_id,request_key));
+        CREATE INDEX IF NOT EXISTS integration_history_tree ON integration_results(tree_id);
         CREATE TABLE IF NOT EXISTS handoffs(id TEXT PRIMARY KEY,tree_id TEXT NOT NULL REFERENCES trees(id),agent_id TEXT NOT NULL REFERENCES agents(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,body TEXT NOT NULL,UNIQUE(agent_id,request_key));
         CREATE TABLE IF NOT EXISTS task_archives(task_id TEXT PRIMARY KEY REFERENCES tasks(id),archived_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS task_active_tree ON tasks(tree_id,status,id);
@@ -294,7 +297,7 @@ export class Store {
         this.db.exec(
           "INSERT OR IGNORE INTO task_archives SELECT id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM tasks WHERE status='completed'",
         );
-      this.run("UPDATE schema_version SET version=14");
+      this.run("UPDATE schema_version SET version=15");
       try {
         const previous = this.one("SELECT * FROM owner WHERE singleton=1")!;
         if (previous.id !== null) {
@@ -2104,6 +2107,48 @@ export class Store {
         handoffId: body.id,
         repositoryId: body.repositoryId,
         commit: body.commit ?? null,
+      });
+      return body;
+    });
+  }
+  saveIntegration(
+    agentId: string,
+    key: string,
+    fingerprint: string,
+    body: { id: string; treeId: string; handoffId: string },
+  ) {
+    return this.transaction(() => {
+      const agent = this.agent(agentId);
+      requireCondition(
+        agent.tree_id === body.treeId,
+        "FORBIDDEN",
+        "Integration outside caller tree",
+      );
+      const old = this.one(
+        "SELECT fingerprint,body FROM integration_results WHERE agent_id=? AND request_key=?",
+        agentId,
+        key,
+      );
+      if (old) {
+        requireCondition(
+          old.fingerprint === fingerprint,
+          "CONFLICT",
+          "Integration request key changed content",
+        );
+        return JSON.parse(String(old.body));
+      }
+      this.run(
+        "INSERT INTO integration_results VALUES(?,?,?,?,?,?)",
+        body.id,
+        body.treeId,
+        agentId,
+        key,
+        fingerprint,
+        JSON.stringify(body),
+      );
+      this.event(agent, "handoff.integration.recorded", {
+        integrationId: body.id,
+        handoffId: body.handoffId,
       });
       return body;
     });

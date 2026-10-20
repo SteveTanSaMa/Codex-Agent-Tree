@@ -80,6 +80,17 @@ try {
   } else {
     const commands = new Set([
       "help",
+      "diagnose",
+      "handoff-record",
+      "handoff-preview",
+      "task-history",
+      "integration-record",
+      "integration-history",
+      "capacity",
+      "history-export",
+      "preflight",
+      "backup",
+      "backup-verify",
       "init",
       "start",
       "serve",

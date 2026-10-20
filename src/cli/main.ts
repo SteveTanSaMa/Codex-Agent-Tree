@@ -1,4 +1,15 @@
 #!/usr/bin/env node
+import {
+  capacity,
+  preflight,
+  backupState,
+  historyExport,
+  verifyBackup,
+} from "./maintenance.ts";
+import {
+  recordIntegration,
+  integrationHistory,
+} from "../workspace/integration.ts";
 import { handoff, previewHandoff } from "../workspace/handoff.ts";
 import { diagnose } from "./diagnose.ts";
 import { rootSettings } from "../storage/interaction.ts";
@@ -274,6 +285,31 @@ async function serve() {
               text(p.taskId, "task ID", 256),
             );
           else if (
+            input.method === "integration-record" ||
+            input.method === "integration-history"
+          ) {
+            const target = text(p.target, "target", 256);
+            if (input.method === "integration-history")
+              result = integrationHistory(
+                coordinator.store,
+                target,
+                Number(p.after ?? 0),
+                Number(p.limit ?? 50),
+              );
+            else {
+              requireCondition(
+                coordinator.workspace,
+                "FORBIDDEN",
+                "No coding workspace authorized",
+              );
+              result = recordIntegration(
+                coordinator.store,
+                coordinator.workspace,
+                target,
+                record(p.input),
+              );
+            }
+          } else if (
             input.method === "handoff-record" ||
             input.method === "handoff-preview"
           ) {
@@ -446,8 +482,72 @@ async function serve() {
   });
 }
 try {
-  if (command === "diagnose") {
+  if (command === "capacity") {
+    const policy = flag("policy");
+    console.log(
+      JSON.stringify(
+        capacity(state, policy ? JSON.parse(readFileSync(policy, "utf8")) : {}),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "preflight")
+    console.log(JSON.stringify(preflight(state), null, 2));
+  else if (command === "backup-verify")
+    console.log(
+      JSON.stringify(
+        verifyBackup(text(flag("destination"), "destination")),
+        null,
+        2,
+      ),
+    );
+  else if (command === "backup")
+    console.log(
+      JSON.stringify(
+        backupState(state, text(flag("destination"), "destination")),
+        null,
+        2,
+      ),
+    );
+  else if (command === "history-export")
+    console.log(
+      JSON.stringify(
+        historyExport(
+          state,
+          text(flag("target"), "target"),
+          text(flag("kind"), "kind"),
+          Number(flag("after", "0")),
+          Number(flag("limit", "50")),
+        ),
+        null,
+        2,
+      ),
+    );
+  else if (command === "diagnose") {
     console.log(JSON.stringify(diagnose(state), null, 2));
+  } else if (
+    command === "integration-record" ||
+    command === "integration-history"
+  ) {
+    console.log(
+      JSON.stringify(
+        await request(command, {
+          target: text(flag("target"), "target"),
+          ...(command === "integration-record"
+            ? {
+                input: JSON.parse(
+                  readFileSync(text(flag("input-file"), "input-file"), "utf8"),
+                ),
+              }
+            : {
+                after: Number(flag("after", "0")),
+                limit: Number(flag("limit", "50")),
+              }),
+        }),
+        null,
+        2,
+      ),
+    );
   } else if (command === "handoff-record" || command === "handoff-preview") {
     console.log(
       JSON.stringify(
@@ -966,7 +1066,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: diagnose (read-only), handoff-record --target ID --input-file JSON, handoff-preview --target LEAD_ID --id HANDOFF_ID, task-history --target ID [--after CURSOR --limit 50], init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, scope-replace --target ID --key KEY --generation N --task TEXT, command-review --target ID --call-id ID --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: preflight, backup --destination NEW_DIRECTORY, backup-verify --destination DIRECTORY, capacity [--policy JSON], history-export --target ID --kind events|attempts|messages|handoffs|integrations [--after CURSOR --limit 50], integration-record --target LEAD --input-file JSON, integration-history --target ID [--after CURSOR --limit 50], diagnose (read-only), handoff-record --target ID --input-file JSON, handoff-preview --target LEAD_ID --id HANDOFF_ID, task-history --target ID [--after CURSOR --limit 50], init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, scope-replace --target ID --key KEY --generation N --task TEXT, command-review --target ID --call-id ID --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

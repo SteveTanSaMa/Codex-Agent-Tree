@@ -1,5 +1,5 @@
+import { worktreeDiagnosis } from "./worktree-diagnosis.ts";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 /** Opens no Store lease, migrates nothing and executes no recovery operation. */
 export function diagnose(state: string) {
@@ -16,43 +16,7 @@ export function diagnose(state: string) {
         "SELECT agent_id,call_id,state,created_at,result_json FROM workspace_commands WHERE state!='completed'",
       )
       .all();
-    const markers = new Map<string, string>();
-    const worktrees: object[] = [];
-    const malformedMarkers: string[] = [];
-    function scanMarkers(dir: string) {
-      if (!existsSync(dir)) return;
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, e.name);
-        if (e.isDirectory()) scanMarkers(p);
-        else if (e.isFile())
-          try {
-            const v = JSON.parse(readFileSync(p, "utf8"));
-            if (typeof v.path === "string") markers.set(v.path, p);
-          } catch {
-            malformedMarkers.push(p);
-          }
-      }
-    }
-    scanMarkers(join(state, "worktree-ready"));
-    function scan(dir: string, depth = 0) {
-      if (!existsSync(dir) || depth > 2) return;
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        if (!e.isDirectory()) continue;
-        const p = join(dir, e.name);
-        if (existsSync(join(p, ".git")))
-          worktrees.push({
-            path: p,
-            marker: markers.get(p) ?? null,
-            reason: markers.has(p)
-              ? "Marker present; Git identity still requires verification"
-              : "Incomplete provisioning: no completion marker",
-            recovery:
-              "Preserve diff and untracked files; compare git worktree list --porcelain against config.json and marker identity. Provision a fresh authorized child and transfer reviewed changes; do not reset or auto-adopt this checkout.",
-          });
-        else scan(p, depth + 1);
-      }
-    }
-    scan(join(state, "workspaces"));
+    const workspace = worktreeDiagnosis(db, state);
     return {
       readOnly: true,
       database: path,
@@ -91,8 +55,7 @@ export function diagnose(state: string) {
         recovery:
           "Review file diffs, test output and surviving processes before explicit command-review. Review records uncertainty; it never claims success or reruns the command.",
       })),
-      malformedMarkers,
-      worktrees,
+      ...workspace,
     };
   } finally {
     db.close();

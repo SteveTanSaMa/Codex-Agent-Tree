@@ -1,6 +1,6 @@
 # Codex Agent Tree
 
-> main 当前为 Beta 4 候选（schema 14）：活跃查询、自动任务归档、只读诊断、交接预览及限定测试端点。已发布 Beta 3 不变；候选资格见[工程改进记录](docs/engineering-improvements.md)。
+> main 当前为 Beta 4 候选（schema 15）：活跃查询、自动任务归档、只读诊断、交接预览及限定测试端点。已发布 Beta 3 不变；候选资格见[工程改进记录](docs/engineering-improvements.md)及[维护与持久交接](docs/maintenance-and-handoff.md)。
 
 简体中文 · [English](README.en.md)
 
@@ -8,7 +8,7 @@
 
 **`0.1.0-beta.4` 候选：面向 macOS arm64、Node ≥26.3.1、单凭据域；Codex CLI 按所需协议能力准入，不再锁定精确版本。** `0.162.0-alpha.17.2` 与 `0.163.0-alpha.10.2` 已有原生行为验证。默认仍是文本分析；显式选择 Git 仓库后，Lead 使用有执行收据的终端，二级 Agent 在独立工作树中读写和运行白名单测试，三级及更深节点只读。当前对话是操作者，团队 Root 是独立 Session。
 
-Beta 限定于可信本地仓库；完整编码 Runtime 尚未支持 Linux/Windows、多凭据域或自动合并。见[编码边界](references/coding.md)、[Beta 3 验收](docs/beta-3-validation.md)和[分层兼容证据](docs/compatibility-recovery-results.md)。升级前停止 Coordinator 并备份完整 state；schema 13→14 保留身份、计数、队列和工作树，旧版不能读取新版状态。已有团队不自动获得新权限，原生 Thread 保留原工具目录。
+Beta 限定于可信本地仓库；完整编码 Runtime 尚未支持 Linux/Windows、多凭据域或自动合并。见[编码边界](references/coding.md)、[Beta 3 验收](docs/beta-3-validation.md)和[分层兼容证据](docs/compatibility-recovery-results.md)。升级前停止 Coordinator 并备份完整 state；schema 13/14→15 保留身份、计数、队列和工作树，旧版不能读取新版状态。已有团队不自动获得新权限，原生 Thread 保留原工具目录。
 
 Beta 3 新增子树 `scope-replace` 与未知命令收据的 `command-review`，强化旧工作代际授权检查，限制状态历史输出，并修复慢 RPC 阻塞新到达任务的调度问题。详见[操作说明](references/operations.md#scope-replacement)、[发布变更](docs/releases/v0.1.0-beta.3.md)和[验收记录](docs/beta-3-validation.md)。
 
@@ -119,7 +119,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` 统一返回 Agent、任务摘要、预算、消息计数和阻塞原因。用其 cursor 调用 `wait`，之后用每次响应的顶层 cursor 续读，`hasMore` 表示还有事件页。`noProgress` 需要检查输入、fence、预算或未知执行，并非团队完成；等待不占用托管 Turn。详细动作、权限和输入文件格式见 [操作说明](references/operations.md)。
 
-升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 4 候选将数据库迁移到 schema 14，旧版不能直接降级读取。已有团队保留各自的 token 策略，新团队默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
+升级前先停止 Coordinator 并备份完整 state 目录，再更新源码并重新 `setup/start`。Beta 4 候选将数据库迁移到 schema 15，旧版不能直接降级读取。已有团队保留各自的 token 策略，新团队默认 observe。已有原生 Thread 保留旧工具目录，可继续消息流程或由操作者维护任务；新增 Task 工具用于新 Thread，不强制重绑身份。
 
 同时更换 CLI 时，停止进程并不会自动替换 daemon 管理包；按[更换可执行文件](references/operations.md#changing-the-codex-executable)先对账，再显式更新独立运行包。
 

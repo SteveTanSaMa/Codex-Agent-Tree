@@ -934,3 +934,169 @@ test("commit handoffs identify divergent targets and reject protected artifacts 
     f.close();
   }
 });
+
+test("retained handoff bundle survives source worktree removal and GC; missing objects produce incomplete preview until explicit import", async () => {
+  const { handoff, previewHandoff, artifactStatus } =
+    await import("../../src/workspace/handoff.ts");
+  const f = fixture();
+  try {
+    const path = f.broker.cwd(f.b);
+    const git = (cwd: string, args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim();
+    const base = f.policy.baseCommit;
+    writeFileSync(join(path, "sum.js"), "export const sum=(a,b)=>a+b;\n");
+    git(path, ["add", "."]);
+    git(path, ["commit", "-m", "detached delivery"]);
+    const commit = git(path, ["rev-parse", "HEAD"]);
+    const record = handoff(f.store, f.broker, f.b.id, {
+      requestKey: "retain",
+      baseCommit: base,
+      commit,
+      validation: "declared unit success",
+    });
+    assert.equal(artifactStatus(record.artifact).status, "verified");
+    git(f.repo, ["worktree", "remove", "--force", path]);
+    git(f.repo, ["reflog", "expire", "--expire=now", "--all"]);
+    git(f.repo, ["gc", "--prune=now"]);
+    assert.throws(() => git(f.repo, ["cat-file", "-e", commit + "^{commit}"]));
+    const preview = previewHandoff(f.store, f.broker, f.a.id, record.id);
+    assert.equal(preview.status, "incomplete");
+    assert.equal(preview.checkComplete, false);
+    assert.ok(preview.checks.some((c) => c.code === "object-missing"));
+    assert.equal(preview.retention.status, "verified");
+    git(f.repo, ["bundle", "verify", record.artifact.path]);
+    git(f.repo, ["bundle", "unbundle", record.artifact.path]);
+    assert.equal(git(f.repo, ["rev-parse", "HEAD"]), base);
+    assert.equal(
+      previewHandoff(f.store, f.broker, f.a.id, record.id).checkComplete,
+      true,
+    );
+    writeFileSync(record.artifact.path, "corruption");
+    assert.equal(artifactStatus(record.artifact).status, "checksum-mismatch");
+  } finally {
+    f.close();
+  }
+});
+test("handoff preview separates permission, unavailable repository, malformed baseline and Git failures from real conflicts", async () => {
+  const { handoff, previewHandoff } =
+    await import("../../src/workspace/handoff.ts");
+  const { AgentTreeError } = await import("../../src/core/errors.ts");
+  const f = fixture();
+  try {
+    const path = f.broker.cwd(f.b),
+      base = f.policy.baseCommit;
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", path, ...args], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim();
+    writeFileSync(join(path, "sum.js"), "export const sum=(a,b)=>a+b;\n");
+    git(["add", "."]);
+    git(["commit", "-m", "delivery"]);
+    const record = handoff(f.store, f.broker, f.b.id, {
+      requestKey: "errors",
+      baseCommit: base,
+      commit: git(["rev-parse", "HEAD"]),
+      validation: "declared",
+    });
+    const original = f.broker.inspectGit;
+    for (const [error, code] of [
+      [new AgentTreeError("FORBIDDEN", "restricted"), "permission-restricted"],
+      [new Error("not a git repository"), "repository-unavailable"],
+      [new Error("unexpected Git failure"), "git-check-failed"],
+    ] as const) {
+      f.broker.inspectGit = () => {
+        throw error;
+      };
+      const p = previewHandoff(f.store, f.broker, f.a.id, record.id);
+      assert.equal(p.status, "incomplete");
+      assert.ok(p.checks.some((c) => c.code === code));
+      assert.ok(!p.issues.includes("possible-merge-conflict"));
+    }
+    f.broker.inspectGit = original;
+    const altered = { ...record, baseCommit: "f".repeat(40) };
+    f.store.db
+      .prepare("UPDATE handoffs SET body=? WHERE id=?")
+      .run(JSON.stringify(altered), record.id);
+    assert.equal(
+      previewHandoff(f.store, f.broker, f.a.id, record.id).status,
+      "incomplete",
+    );
+  } finally {
+    f.close();
+  }
+});
+test("integration receipts retain declarations separately from host observations, enforce idempotency and tree isolation", async () => {
+  const { handoff } = await import("../../src/workspace/handoff.ts");
+  const { recordIntegration, integrationHistory } =
+    await import("../../src/workspace/integration.ts");
+  const f = fixture();
+  try {
+    f.broker.cwd(f.b);
+    const h = handoff(f.store, f.broker, f.b.id, {
+      requestKey: "patch-result",
+      baseCommit: f.policy.baseCommit,
+      validation: "agent declaration",
+    });
+    const input = {
+      requestKey: "integration-1",
+      handoffId: h.id,
+      targetBaseline: f.policy.baseCommit,
+      integrationCommit: f.policy.baseCommit,
+      status: "success",
+      validation: {
+        command: "node verify.mjs",
+        result: "declared pass",
+        evidence: "external/test.log",
+      },
+    };
+    const r = recordIntegration(f.store, f.broker, f.a.id, input);
+    assert.equal(r.status, "success");
+    assert.equal(r.statusSource, "operator-declared");
+    assert.equal(r.hostVerifiedSuccess, false);
+    assert.equal(r.hostFacts.validationExecutedByThisOperation, false);
+    assert.deepEqual(recordIntegration(f.store, f.broker, f.a.id, input), r);
+    assert.throws(
+      () =>
+        recordIntegration(f.store, f.broker, f.a.id, {
+          ...input,
+          status: "failed",
+        }),
+      /changed content/,
+    );
+    assert.throws(
+      () => recordIntegration(f.store, f.broker, f.b.id, input),
+      /Lead/,
+    );
+    const other = f.store.createRoot("Other", "other", {
+      tokens: 100,
+      maxDepth: 1,
+      maxAgents: 2,
+      maxConcurrentTurns: 1,
+      maxTurnsPerAgent: 2,
+      turnReservation: 1,
+    });
+    assert.throws(
+      () => recordIntegration(f.store, f.broker, other.id, input),
+      /caller tree/,
+    );
+    recordIntegration(f.store, f.broker, f.a.id, {
+      ...input,
+      requestKey: "integration-2",
+      status: "unverified",
+    });
+    const first = integrationHistory(f.store, f.a.id, 0, 1);
+    assert.equal(first.items.length, 1);
+    assert.ok(first.nextCursor);
+    assert.equal(
+      integrationHistory(f.store, f.a.id, Number(first.nextCursor), 1).items[0]
+        .status,
+      "unverified",
+    );
+  } finally {
+    f.close();
+  }
+});

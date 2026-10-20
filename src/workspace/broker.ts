@@ -1,3 +1,4 @@
+import { sha256File } from "../core/file-hash.ts";
 import {
   validateResources,
   resourceCall,
@@ -18,6 +19,7 @@ import {
   openSync,
   fsyncSync,
   closeSync,
+  statSync,
 } from "node:fs";
 import {
   join,
@@ -704,6 +706,7 @@ export class WorkspaceBroker {
   ) {
     requireCondition(
       [
+        "cat-file",
         "rev-parse",
         "merge-base",
         "diff",
@@ -730,6 +733,81 @@ export class WorkspaceBroker {
       undefined,
       input,
     );
+  }
+  /** Immutable full reachable commit bundle; never changes a user ref or imports objects. */
+  retainHandoff(
+    agent: Agent,
+    repositoryId: string,
+    id: string,
+    expectedCommit: string,
+  ) {
+    requireCondition(
+      /^[a-f0-9-]{36}$/.test(id),
+      "INVALID_INPUT",
+      "Invalid artifact ID",
+    );
+    this.requireWorkspaceIdle(agent, repositoryId, false, false);
+    const { repo } = this.selection(agent, repositoryId);
+    const home = join(this.state, "git-homes", agent.id);
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    const temporary = join(home, id + ".bundle");
+    const directory = join(this.state, "handoff-artifacts");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    requireCondition(
+      realpathSync(directory) === directory,
+      "FORBIDDEN",
+      "Artifact directory must not be a symlink",
+    );
+    const path = join(directory, id + ".bundle");
+    try {
+      this.sandboxGit(
+        this.cwd(agent, repositoryId, false),
+        ["bundle", "create", temporary, "HEAD"],
+        agent.id,
+        repo,
+      );
+      const heads = this.sandboxGit(
+        this.cwd(agent, repositoryId, false),
+        ["bundle", "list-heads", temporary],
+        agent.id,
+        repo,
+      );
+      requireCondition(
+        heads === expectedCommit + " HEAD",
+        "CONFLICT",
+        "Source HEAD changed while retaining the handoff",
+      );
+      const bytes = statSync(temporary).size;
+      requireCondition(
+        bytes <= 128 * 1024 * 1024,
+        "STATE_BLOCKED",
+        "Handoff bundle exceeds 128 MiB; preserve it using an operator-managed artifact workflow",
+      );
+      const sha256 = sha256File(temporary);
+      const fd = openSync(temporary, "r");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(temporary, path);
+      const dir = openSync(directory, "r");
+      try {
+        fsyncSync(dir);
+      } finally {
+        closeSync(dir);
+      }
+      return {
+        kind: "git-bundle",
+        commit: expectedCommit,
+        path,
+        sha256,
+        bytes,
+        retention: "indefinite-no-automatic-cleanup",
+      };
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
   }
   private sandboxGit(
     cwd: string,

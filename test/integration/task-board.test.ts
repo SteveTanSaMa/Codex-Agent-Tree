@@ -438,7 +438,7 @@ test("schema 4 upgrades to task storage without changing existing native identit
       assert.equal(
         reopened.db.prepare("SELECT version FROM schema_version").get()
           ?.version,
-        14,
+        15,
       );
       assert.deepEqual(reopened.binding(f.root.id), binding);
       assert.deepEqual(reopened.budgetStatus(f.root.tree_id), budget);
@@ -602,4 +602,47 @@ test("active task capacity is enforced on create and reopen; completing work fre
   } finally {
     f.close();
   }
+});
+
+test("deep retained dependency graphs validate without repeated wave scans while cycles and duplicate edges still fail", async () => {
+  const { validateTaskGraph } = await import("../../src/core/tasks.ts");
+  const base = {
+    id: "",
+    treeId: "tree",
+    createdBy: "lead",
+    ownerId: null,
+    revision: 1,
+    status: "completed" as const,
+    subject: "history",
+    description: "retained",
+    result: "done",
+    createdAt: "time",
+    updatedAt: "time",
+    blockedBy: [] as string[],
+    writeScopes: [],
+    ready: false,
+    writeScopeWarnings: [],
+  };
+  const tasks = Array.from({ length: 5000 }, (_, i) => ({
+    ...base,
+    id: String(i),
+    blockedBy: i ? [String(i - 1)] : [],
+  }));
+  assert.doesNotThrow(() => validateTaskGraph(tasks));
+  assert.throws(
+    () =>
+      validateTaskGraph([
+        { ...tasks[0]!, blockedBy: ["4999"] },
+        ...tasks.slice(1),
+      ]),
+    /cycle/,
+  );
+  assert.throws(
+    () =>
+      validateTaskGraph([
+        { ...base, id: "a", blockedBy: ["b", "b"] },
+        { ...base, id: "b" },
+      ]),
+    /Duplicate/,
+  );
 });

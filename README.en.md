@@ -1,6 +1,6 @@
 # Codex Agent Tree
 
-> main is a Beta 4 candidate (schema 14): active queries, automatic task archives, read-only diagnosis, handoff previews and scoped test endpoints. Published Beta 3 is unchanged; see [engineering improvements](docs/engineering-improvements.md).
+> main is a Beta 4 candidate (schema 15): active queries, automatic task archives, read-only diagnosis, handoff previews and scoped test endpoints. Published Beta 3 is unchanged; see [engineering improvements](docs/engineering-improvements.md) and [maintenance and durable handoff](docs/maintenance-and-handoff.md).
 
 [简体中文](README.md) · English
 
@@ -8,7 +8,7 @@ An installable Codex Skill for recursive teams of independent, recoverable Codex
 
 **`0.1.0-beta.4` candidate: macOS arm64, Node ≥26.3.1 and one credential domain. Codex CLI admission checks required protocol capabilities without an exact release pin.** Native behavior has been verified with `0.162.0-alpha.17.2` and `0.163.0-alpha.10.2`. Text analysis remains the default. Opt-in Git workspaces give Lead an audited terminal, second-level members isolated writable worktrees and approved tests, and deeper members read-only tools. Your current conversation is the operator; the managed Root is a separate session.
 
-This Beta targets trusted local repositories. Full coding Runtime support for Linux/Windows, multiple credential domains and automatic merges remains unavailable. See [coding boundaries](references/coding.md), [Beta 3 qualification](docs/beta-3-validation.md) and [layered compatibility evidence](docs/compatibility-recovery-results.md). Stop the Coordinator and back up complete state before upgrading. Schema 13→14 preserves identities, counters, queues and worktrees; older versions cannot read the upgraded state. Existing teams gain no permissions automatically, and native Threads retain their tool catalogs.
+This Beta targets trusted local repositories. Full coding Runtime support for Linux/Windows, multiple credential domains and automatic merges remains unavailable. See [coding boundaries](references/coding.md), [Beta 3 qualification](docs/beta-3-validation.md) and [layered compatibility evidence](docs/compatibility-recovery-results.md). Stop the Coordinator and back up complete state before upgrading. Schema 13/14→15 preserves identities, counters, queues and worktrees; older versions cannot read the upgraded state. Existing teams gain no permissions automatically, and native Threads retain their tool catalogs.
 
 Beta 3 adds subtree `scope-replace` and `command-review` for unknown command receipts, enforces stale-scope authorization, bounds history output and fixes slow RPCs delaying newly arriving work. See [operations](references/operations.md#scope-replacement), [release changes](docs/releases/v0.1.0-beta.3.md) and [qualification](docs/beta-3-validation.md).
 
@@ -120,7 +120,7 @@ node "$SKILL_DIR/scripts/cat.mjs" task-update --target ROOT_ID --task-id TASK_ID
 
 `view` combines agent summaries, tasks, budgets, message counts and blocking reasons. Pass its cursor to `wait`, then continue with each response's top-level cursor. `hasMore` indicates another event page. `noProgress` calls for inspecting missing input, fences, budgets or unknown work; it does not prove completion. Operator waiting does not occupy a managed Turn. See [operations](references/operations.md) for permissions, dependency edits, input files and cursor details.
 
-Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. The Beta 4 candidate migrates the database to schema 14; older versions cannot directly read it. Existing trees retain their token policies; new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
+Before upgrading, stop the Coordinator and back up the complete state directory, then update source and rerun `setup/start`. The Beta 4 candidate migrates the database to schema 15; older versions cannot directly read it. Existing trees retain their token policies; new trees default to observe. Existing native Threads retain their original tool catalogs and can keep using messages or operator-managed tasks. New Task tools apply to new Threads; upgrading does not force rebinding.
 
 Changing the CLI also requires reconciling native work and explicitly updating the dedicated managed package; stopping the process alone does not replace it. See [changing the executable](references/operations.md#changing-the-codex-executable).
 

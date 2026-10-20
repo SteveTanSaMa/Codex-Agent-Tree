@@ -1,5 +1,7 @@
 # Beta 4 candidate engineering improvements / Beta 4 候选工程改进
 
+> Historical first-pass record (schema 14). Current candidate continuation uses schema 15: [maintenance and durable handoff](maintenance-and-handoff.md). / 本页保留首轮结果，当前后续改进见链接。
+
 2026-10-20. Baseline: main `9cff5bf`; published Beta 3 `b9dba2f`. Candidate: `0.1.0-beta.4`, schema 14. No release is published by this work.
 
 ## Scope and acceptance / 范围与验收

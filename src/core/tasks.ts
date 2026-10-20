@@ -200,7 +200,8 @@ export function validateTaskGraph(tasks: Task[]): void {
   const live = new Map(
     tasks.filter((t) => t.status !== "deleted").map((t) => [t.id, t]),
   );
-  const remaining = new Set(live.keys());
+  const indegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
   for (const task of live.values()) {
     requireCondition(
       task.blockedBy.every((id) => live.has(id) || withdrawn.has(id)),
@@ -213,15 +214,32 @@ export function validateTaskGraph(tasks: Task[]): void {
       "Duplicate task dependency",
     );
   }
-  while (remaining.size) {
-    const ready = [...remaining].filter((id) =>
-      live.get(id)!.blockedBy.every((dep) => !remaining.has(dep)),
-    );
-    requireCondition(
-      ready.length > 0,
-      "CONFLICT",
-      "Task dependencies contain a cycle",
-    );
-    for (const id of ready) remaining.delete(id);
+  for (const task of live.values()) {
+    const blockers = task.blockedBy.filter((id) => live.has(id));
+    indegree.set(task.id, blockers.length);
+    for (const dep of blockers) {
+      const children = dependents.get(dep) ?? [];
+      children.push(task.id);
+      dependents.set(dep, children);
+    }
   }
+  const queue = [...indegree]
+    .filter(([, degree]) => degree === 0)
+    .map(([id]) => id);
+  let visited = 0;
+  // Kahn traversal retains missing/duplicate/cycle checks in O(V+E), including deep historical chains.
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const id = queue[cursor]!;
+    visited++;
+    for (const child of dependents.get(id) ?? []) {
+      const degree = indegree.get(child)! - 1;
+      indegree.set(child, degree);
+      if (degree === 0) queue.push(child);
+    }
+  }
+  requireCondition(
+    visited === live.size,
+    "CONFLICT",
+    "Task dependencies contain a cycle",
+  );
 }

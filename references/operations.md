@@ -115,7 +115,7 @@ The coding runtime targets macOS arm64, Node ≥26.3.1 and one credential domain
 
 Beta 3 upgrades to schema 13, adding durable work-scope epochs and replacement receipts alongside an immutable workspace registry and per-Agent repository grants/worktree ownership. Existing coding states retain their original single-repository layout. Multi-repository teams require a new state; see [coding operations](coding.md#multiple-repositories). Native cumulative samples and human final receipts are stored separately, then attributed in Turn order. A missing final notification no longer makes the next Turn charge an already attested difference again. Late evidence may decrease a later Turn's attributed amount while preserving every native fact and receipt. Missing evidence retains unknown liability; contradictory evidence rolls back rather than fabricating a zero cost. See the [reconciliation contract](https://github.com/SteveTanSaMa/Codex-Agent-Tree/blob/main/docs/usage-reconciliation.md).
 
-Stop and back up the complete state before upgrading. Beta 4 candidate uses schema 14; Beta 3 and older source refuse the upgraded database. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
+Stop and back up the complete state before upgrading. Beta 4 candidate uses schema 15; Beta 3 and older source refuse the upgraded database. Migration reconstructs retained events and preserves lower bounds where evidence is unavailable; conflicting evidence refuses migration. Restore the matching backup for rollback, with reconciliation of any intervening native work.
 
 ## Changing the Codex executable
 
@@ -236,4 +236,8 @@ Preview checks changed target baseline, source scope generation, dirty target, d
 {"requestKey":"module-v1","repositoryId":"app","baseCommit":"FULL_BASE_SHA","commit":"FULL_CHANGE_SHA","dependsOn":[],"validation":"Declared: unit tests passed; evidence path and command"}
 ```
 
-完成自动归档、重新打开占用容量；历史和删除记录用分页查询。诊断只读且不迁移，不把未知结果当成失败后可重试。交接预览不应用补丁、不合并；Lead 需审查依赖、基线和冲突后显式整合并独立验证。升级 schema 14 前备份整个 state，降级恢复旧备份；已有 Thread 不会自动换工具目录。
+完成自动归档、重新打开占用容量；历史和删除记录用分页查询。诊断只读且不迁移，不把未知结果当成失败后可重试。交接预览不应用补丁、不合并；Lead 需审查依赖、基线和冲突后显式整合并独立验证。升级 schema 15 前备份整个 state，降级恢复旧备份；已有 Thread 不会自动换工具目录。
+
+Current candidate adds retained commit bundles and operator integration receipts (schema 15), structured preview failures, capacity/export and stopped backup commands. See [maintenance and durable handoff](../docs/maintenance-and-handoff.md) for bilingual procedures and limits.
+
+当前候选补齐持久提交包、整合回执、预览失败分类及维护命令，详见上述双语操作文档；旧 release 不变。

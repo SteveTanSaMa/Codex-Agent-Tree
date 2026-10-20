@@ -298,7 +298,7 @@ test("schema 12 scope migration preserves legacy authority, pending work and cou
     reopened = new Store(join(f.dir, "business.sqlite"));
     assert.equal(
       reopened.db.prepare("SELECT version FROM schema_version").get()!.version,
-      14,
+      15,
     );
     assert.equal(reopened.agent(f.root.id).turns, 1);
     assert.equal(reopened.messages(f.root.id)[0]!.status, "queued");
