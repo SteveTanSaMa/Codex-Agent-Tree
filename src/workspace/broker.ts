@@ -431,6 +431,24 @@ export function workspaceTools(
             { command: string },
             ["command"],
           ),
+          tool(
+            "terminal_start",
+            "Start one Lead-only sandboxed shell command in the background, with a 10 minute maximum. Returns a durable command ID, not a result. Use terminal_status to inspect the outcome and terminal_stop to request cancellation. A running or unknown command is never automatically replayed. Workspace file tools remain locked while it runs.",
+            { command: string },
+            ["command"],
+          ),
+          tool(
+            "terminal_status",
+            "Read the status and bounded output of your background command. Unknown means the host cannot establish its outcome; do not replay it.",
+            { commandId: string },
+            ["commandId"],
+          ),
+          tool(
+            "terminal_stop",
+            "Request cancellation of your running background command; inspect terminal_status for the final receipt. Does not retry unknown commands.",
+            { commandId: string },
+            ["commandId"],
+          ),
         ]
       : []),
     ...(depth <= 1
@@ -464,7 +482,12 @@ export class WorkspaceBroker {
   private paths = new Map<string, string>();
   private running = new Map<
     string,
-    { controller: AbortController; workspace: string; reads: string[] }
+    {
+      controller: AbortController;
+      workspace: string;
+      reads: string[];
+      commandId?: string;
+    }
   >();
   readonly state: string;
   readonly policy: WorkspacePolicy;
@@ -912,6 +935,15 @@ export class WorkspaceBroker {
   commandRunning(agentId: string) {
     return this.running.has(agentId);
   }
+  backgroundCommandRunning(agentId: string, commandId: string) {
+    return this.running.get(agentId)?.commandId === commandId;
+  }
+  stopBackgroundCommand(agentId: string, commandId: string) {
+    const running = this.running.get(agentId);
+    if (!running || running.commandId !== commandId) return false;
+    running.controller.abort();
+    return true;
+  }
   validateCommand(agent: Agent, name: string, value: unknown): TestCommand {
     validateResources(this.policy.readOnlyResources ?? {});
     requireCondition(
@@ -981,7 +1013,21 @@ export class WorkspaceBroker {
       "A command is running in this workspace; wait for its result before file operations",
     );
   }
-  async call(agent: Agent, name: string, value: unknown) {
+  async call(
+    agent: Agent,
+    name: string,
+    value: unknown,
+    background?: { commandId: string; timeoutMs: number },
+  ) {
+    requireCondition(
+      !background ||
+        (agent.depth === 0 &&
+          name === "terminal" &&
+          background.timeoutMs === 600000 &&
+          !!background.commandId),
+      "FORBIDDEN",
+      "Background execution is limited to Lead terminal commands with a fixed timeout",
+    );
     requireCondition(
       value !== null && typeof value === "object" && !Array.isArray(value),
       "INVALID_INPUT",
@@ -1224,7 +1270,12 @@ export class WorkspaceBroker {
     const home = join(this.state, "test-homes", agent.id);
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const controller = new AbortController();
-    this.running.set(agent.id, { controller, workspace: cwd, reads });
+    this.running.set(agent.id, {
+      controller,
+      workspace: cwd,
+      reads,
+      ...(background ? { commandId: background.commandId } : {}),
+    });
     try {
       return await new Promise<object>((yes, no) => {
         const child = spawn(
@@ -1248,6 +1299,7 @@ export class WorkspaceBroker {
                 Object.values(this.policy.readOnlyResources ?? {}),
               ),
             ),
+            String(background?.timeoutMs ?? 30000),
           ],
           {
             cwd,
@@ -1279,7 +1331,10 @@ export class WorkspaceBroker {
         };
         const abort = () => stop("cancelled");
         controller.signal.addEventListener("abort", abort, { once: true });
-        const timer = setTimeout(() => stop("timeout"), 30000);
+        const timer = setTimeout(
+          () => stop("timeout"),
+          background?.timeoutMs ?? 30000,
+        );
         for (const pipe of [child.stdout, child.stderr])
           pipe.on("data", (data: Buffer) => {
             const left = limit - output.length;

@@ -402,6 +402,37 @@ test("mock fault: live old native execution is adopted; stale connection callbac
     await f.close();
   }
 });
+
+test("a completion after disconnect is recovered from native history without replay or fabricated usage", async () => {
+  const f = fixture("running");
+  let replacement: Coordinator | undefined;
+  try {
+    f.runtime.turns = [turn("native-turn", f.a.id, "inProgress")];
+    await f.coordinator.start();
+    await f.coordinator.stop();
+    // The old disconnected callback cannot settle against the closed store.
+    f.runtime.emit("turn/completed", {
+      threadId: "thread-a",
+      turn: turn("native-turn", f.a.id, "completed"),
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    const runtime = new FakeRuntime();
+    runtime.turns = [turn("native-turn", f.a.id, "completed")];
+    replacement = new Coordinator(f.coordinator.options, runtime);
+    await replacement.start();
+    assert.equal(replacement.store.attempt(f.a.id).state, "completed");
+    assert.equal(replacement.store.attempt(f.a.id).turn_id, "native-turn");
+    assert.equal(runtime.starts, 0);
+    assert.equal(
+      replacement.store.budgetStatus(f.root.tree_id).unknownUsageAttempts
+        .length,
+      1,
+    );
+  } finally {
+    await replacement?.stop();
+    await f.close();
+  }
+});
 test("mock fault: unavailable or ambiguous history leaves unknown work and retained liability, with no automatic retry", async () => {
   for (const missing of [true, false]) {
     const f = fixture();
@@ -640,6 +671,125 @@ test("shutdown retains exclusive ownership until the old control-channel cleanup
       join(f.coordinator.options.stateDirectory, "business.sqlite"),
     );
     next.close();
+  } finally {
+    release();
+    await f.close();
+  }
+});
+
+test("concurrent shutdown callers wait for the same control-channel cleanup and database release", async () => {
+  const f = fixture("running");
+  let release: () => void = () => {};
+  const barrier = new Promise<void>((yes) => {
+    release = yes;
+  });
+  let first: Promise<void> | undefined;
+  let second: Promise<void> | undefined;
+  try {
+    first = f.coordinator.stop(barrier);
+    let secondReturned = false;
+    second = f.coordinator.stop().then(() => {
+      secondReturned = true;
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    assert.equal(
+      secondReturned,
+      false,
+      "a second stop must not report completion while ownership is held",
+    );
+    assert.throws(
+      () =>
+        new Store(
+          join(f.coordinator.options.stateDirectory, "business.sqlite"),
+        ),
+      /owns this database/,
+    );
+    release();
+    await Promise.all([first, second]);
+    const replacement = new Store(
+      join(f.coordinator.options.stateDirectory, "business.sqlite"),
+    );
+    replacement.close();
+  } finally {
+    release();
+    await Promise.allSettled(
+      [first, second].filter((p): p is Promise<void> => !!p),
+    );
+    await f.close();
+  }
+});
+
+test("a concurrent shutdown cleanup barrier retains database ownership until every channel closes", async () => {
+  const f = fixture("running");
+  let releaseFirst: () => void = () => {};
+  let releaseSecond: () => void = () => {};
+  const firstBarrier = new Promise<void>((yes) => {
+    releaseFirst = yes;
+  });
+  const secondBarrier = new Promise<void>((yes) => {
+    releaseSecond = yes;
+  });
+  let first: Promise<void> | undefined;
+  let second: Promise<void> | undefined;
+  try {
+    first = f.coordinator.stop(firstBarrier);
+    second = f.coordinator.stop(secondBarrier);
+    releaseFirst();
+    await new Promise<void>((r) => setImmediate(r));
+    assert.throws(
+      () =>
+        new Store(
+          join(f.coordinator.options.stateDirectory, "business.sqlite"),
+        ),
+      /owns this database/,
+    );
+    releaseSecond();
+    await Promise.all([first, second]);
+    const replacement = new Store(
+      join(f.coordinator.options.stateDirectory, "business.sqlite"),
+    );
+    replacement.close();
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await Promise.allSettled(
+      [first, second].filter((p): p is Promise<void> => !!p),
+    );
+    await f.close();
+  }
+});
+
+test("concurrent callers observe a rejected cleanup barrier after all cleanup settles", async () => {
+  const f = fixture("running");
+  let release: () => void = () => {};
+  const barrier = new Promise<void>((yes) => {
+    release = yes;
+  });
+  try {
+    const first = f.coordinator.stop(barrier);
+    const second = f.coordinator.stop(
+      Promise.reject(new Error("second channel failed")),
+    );
+    const outcomes = Promise.allSettled([first, second]);
+    await new Promise<void>((r) => setImmediate(r));
+    assert.throws(
+      () =>
+        new Store(
+          join(f.coordinator.options.stateDirectory, "business.sqlite"),
+        ),
+      /owns this database/,
+    );
+    release();
+    const results = await outcomes;
+    for (const result of results) {
+      assert.equal(result.status, "rejected");
+      if (result.status === "rejected")
+        assert.match(String(result.reason), /second channel failed/);
+    }
+    const replacement = new Store(
+      join(f.coordinator.options.stateDirectory, "business.sqlite"),
+    );
+    replacement.close();
   } finally {
     release();
     await f.close();

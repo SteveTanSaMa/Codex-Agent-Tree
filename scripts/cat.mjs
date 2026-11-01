@@ -81,6 +81,7 @@ try {
     const commands = new Set([
       "help",
       "diagnose",
+      "environment",
       "handoff-record",
       "handoff-preview",
       "task-history",

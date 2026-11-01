@@ -716,6 +716,7 @@ export class Store {
     actor: Actor,
     callId: string,
     input: unknown,
+    exclusive = false,
   ): { cached: boolean; result?: unknown } {
     text(callId, "native tool call ID", 256);
     return this.transaction(() => {
@@ -743,6 +744,15 @@ export class Store {
           result: JSON.parse(String(prior.result_json)) as unknown,
         };
       }
+      if (exclusive)
+        requireCondition(
+          !this.one(
+            "SELECT 1 FROM workspace_commands WHERE agent_id=? AND state='accepted' LIMIT 1",
+            agent.id,
+          ),
+          "STATE_BLOCKED",
+          "An earlier command remains running or unknown; inspect and resolve it before starting another background command",
+        );
       this.run(
         "INSERT INTO workspace_commands VALUES(?,?,?,'accepted',NULL,?)",
         agent.id,
@@ -782,6 +792,22 @@ export class Store {
       "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN state='accepted' THEN 1 ELSE 0 END),0) AS unresolved,COALESCE(SUM(CASE WHEN state='reviewed-unknown' THEN 1 ELSE 0 END),0) AS reviewedUnknown FROM workspace_commands WHERE agent_id=?",
       agentId,
     );
+  }
+  workspaceCommand(agentId: string, callId: string) {
+    text(callId, "command ID", 256);
+    const row = this.one(
+      "SELECT state,result_json FROM workspace_commands WHERE agent_id=? AND call_id=?",
+      agentId,
+      callId,
+    );
+    requireCondition(row, "NOT_FOUND", "Command receipt not found");
+    return {
+      state: String(row.state),
+      result:
+        row.result_json === null
+          ? null
+          : (JSON.parse(String(row.result_json)) as unknown),
+    };
   }
   reviewUnknownCommand(agentId: string, callId: string, reason: string) {
     text(callId, "native call ID", 256);

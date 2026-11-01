@@ -5,6 +5,15 @@ const command = JSON.parse(process.argv[2]!) as {
   executable: string;
   args: string[];
 };
+// The broker enforces the normal timeout; this independent cap also handles a
+// stalled broker. Never accept an unbounded supervisor lifetime.
+const requestedTimeout = Number(process.argv[3] ?? 30000);
+const timeout =
+  Number.isSafeInteger(requestedTimeout) &&
+  requestedTimeout >= 1 &&
+  requestedTimeout <= 600000
+    ? requestedTimeout
+    : 30000;
 const child = spawn(command.executable, command.args, {
   shell: false,
   detached: process.platform !== "win32",
@@ -24,7 +33,7 @@ function kill() {
 const timer = setTimeout(() => {
   kill();
   process.exitCode = 124;
-}, 30000);
+}, timeout + 1000);
 process.stdin.resume();
 process.stdin.on("end", () => {
   if (!done) kill();

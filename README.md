@@ -95,7 +95,7 @@ node "$SKILL_DIR/scripts/cat.mjs" start --state "$HOME/.cat/code-team"
 | 二级 | 独立 detached worktree 读写 | 仅 `run_test` 白名单；没有通用 shell |
 | 三级及以下 | 读取父级工作树、搜索、diff | 没有 terminal 或测试执行权限 |
 
-受限工具为 `read_file`、`write_file`（哈希冲突校验）、`search_code`、`git_diff`、`run_test`。层级限制由宿主检查，隐藏工具即使被直接请求也不能越权。命令经过 macOS 沙箱，默认禁止联网（命名测试可显式授权固定本地 TCP 端口），写入限自己的工作区，超时 30 秒，输出上限 64 KiB。Lead 与子节点命令均有持久收据；不确定结果不会自动重放。
+受限工具为 `read_file`、`write_file`（哈希冲突校验）、`search_code`、`git_diff`、`run_test`。层级限制由宿主检查，隐藏工具即使被直接请求也不能越权。命令经过 macOS 沙箱，默认禁止联网（命名测试可显式授权固定本地 TCP 端口），写入限自己的工作区；同步命令超时 30 秒，Lead 可使用后台命令运行最多 10 分钟，输出上限 64 KiB。命令均有持久收据；不确定结果不会自动重放。[环境预检与诊断](docs/environment-diagnosis.md)。
 
 每个 coding state 只支持一棵 Lead 树。二级工作树固定从初始化提交创建，不复制依赖、忽略文件或后续父级修改；不要让不同 Coordinator 同时编辑同一个 Lead 仓库。依赖较重的项目可由 Lead 在已有依赖的原仓库运行集成测试。用量不代表供应商账单，Beta 也没有证明多 Agent 比单 Agent 更省 token。完整操作与恢复规则见[编码说明](references/coding.md)。
 

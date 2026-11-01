@@ -802,6 +802,164 @@ test("command effect is cached for the same native call ID; a new call ID intent
   }
 });
 
+test("background terminal returns promptly, locks the workspace, records the outcome and can be stopped", async () => {
+  const f = fixture(),
+    runtime = new ControlledRuntime();
+  const c = new Coordinator(
+    {
+      stateDirectory: join(f.dir, "async-state"),
+      runtimeHome: join(f.dir, "async-home"),
+      workspace: f.policy,
+    },
+    runtime,
+  );
+  const wait = async (p: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!p() && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(p(), "timed out waiting for condition");
+  };
+  try {
+    await c.start();
+    const root = c.createRoot("Lead", "fixture", {
+      tokenPolicy: "observe",
+      tokens: 1000,
+      maxDepth: 0,
+      maxAgents: 1,
+      maxConcurrentTurns: 1,
+      maxTurnsPerAgent: 2,
+      turnReservation: 100,
+    });
+    await wait(
+      () => runtime.starts.length === 1 && !!c.store.attempts()[0]?.turn_id,
+    );
+    const turn = runtime.starts[0]!;
+    let id = 0;
+    const request = async (tool: string, callId: string, args: object) => {
+      const index = runtime.responses.length;
+      runtime.onRequest({
+        id: ++id,
+        method: "item/tool/call",
+        connectionGeneration: 1,
+        params: {
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          callId,
+          tool,
+          arguments: args,
+        },
+      });
+      await wait(() => runtime.responses.length > index);
+      const value = runtime.responses[index] as {
+        success: boolean;
+        contentItems: { text: string }[];
+      };
+      return {
+        success: value.success,
+        payload: value.success
+          ? JSON.parse(value.contentItems[0]!.text)
+          : value.contentItems[0]!.text,
+      };
+    };
+    const command = `'${process.execPath}' -e 'require("node:fs").writeFileSync("started.txt","yes");setInterval(()=>{},1000)'`;
+    const started = await request("terminal_start", "long-command", {
+      command,
+    });
+    assert.equal(started.success, true);
+    assert.deepEqual(started.payload, {
+      commandId: "long-command",
+      state: "running",
+      timeoutMs: 600000,
+    });
+    await wait(() => existsSync(join(f.repo, "started.txt")));
+    const running = await request("terminal_status", "status-1", {
+      commandId: "long-command",
+    });
+    assert.equal(running.payload.state, "running");
+    const locked = await request("read_file", "read-1", {
+      path: "started.txt",
+    });
+    assert.equal(locked.success, false);
+    const stop = await request("terminal_stop", "stop-1", {
+      commandId: "long-command",
+    });
+    assert.equal(stop.payload.stopRequested, true);
+    await wait(
+      () =>
+        c.store.workspaceCommand(root.id, "long-command").state === "completed",
+    );
+    const finished = await request("terminal_status", "status-2", {
+      commandId: "long-command",
+    });
+    assert.equal(finished.payload.state, "completed");
+    assert.equal(finished.payload.result.stopped, "cancelled");
+    const retry = await request("terminal_start", "long-command", { command });
+    assert.equal(retry.payload.state, "completed");
+    assert.equal(readFileSync(join(f.repo, "started.txt"), "utf8"), "yes");
+    assert.ok(
+      !workspaceTools(1, []).some((t) => t.name.startsWith("terminal_")),
+    );
+    const quick = await request("terminal_start", "quick-command", {
+      command: "printf finished",
+    });
+    assert.equal(quick.payload.state, "running");
+    await wait(
+      () =>
+        c.store.workspaceCommand(root.id, "quick-command").state ===
+        "completed",
+    );
+    const quickDone = await request("terminal_status", "status-quick", {
+      commandId: "quick-command",
+    });
+    assert.equal(quickDone.payload.result.exitCode, 0);
+    assert.equal(quickDone.payload.result.output, "finished");
+    // Simulate recovery of an accepted receipt with no live local owner.
+    const actor = c.store.authenticate(turn.threadId, turn.turnId, 1);
+    c.store.beginWorkspaceCommand(actor, "recovered-unknown", {
+      command: "uncertain",
+    });
+    const unknown = await request("terminal_status", "status-unknown", {
+      commandId: "recovered-unknown",
+    });
+    assert.equal(unknown.payload.state, "unknown");
+    assert.equal(
+      (
+        await request("terminal_stop", "stop-unknown", {
+          commandId: "recovered-unknown",
+        })
+      ).success,
+      false,
+    );
+    assert.equal(
+      (await request("terminal_start", "blocked-new", { command })).success,
+      false,
+    );
+    assert.equal(
+      c.store.workspaceCommand(root.id, "recovered-unknown").state,
+      "accepted",
+    );
+  } finally {
+    await c.stop();
+    f.close();
+  }
+});
+
+test("background command cannot begin while an older receipt remains unresolved", () => {
+  const f = fixture();
+  try {
+    f.store.beginWorkspaceCommand(f.actor, "older", { command: "uncertain" });
+    assert.throws(
+      () =>
+        f.store.beginWorkspaceCommand(f.actor, "new", { command: "new" }, true),
+      /earlier command remains/,
+    );
+    assert.equal(f.store.workspaceCommand(f.a.id, "older").state, "accepted");
+    assert.throws(() => f.store.workspaceCommand(f.b.id, "older"), /not found/);
+  } finally {
+    f.close();
+  }
+});
+
 test("tracked handoffs persist and preview clean/conflicting targets without merging", async () => {
   const { handoff, previewHandoff } =
     await import("../../src/workspace/handoff.ts");

@@ -12,6 +12,7 @@ import {
 } from "../workspace/integration.ts";
 import { handoff, previewHandoff } from "../workspace/handoff.ts";
 import { diagnose } from "./diagnose.ts";
+import { environment } from "./environment.ts";
 import { rootSettings } from "../storage/interaction.ts";
 import { Store } from "../storage/store.ts";
 import {
@@ -487,6 +488,18 @@ try {
     console.log(
       JSON.stringify(
         capacity(state, policy ? JSON.parse(readFileSync(policy, "utf8")) : {}),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "environment") {
+    const tools = flag("tools");
+    console.log(
+      JSON.stringify(
+        environment(
+          state,
+          tools ? JSON.parse(readFileSync(tools, "utf8")) : [],
+        ),
         null,
         2,
       ),
@@ -1066,7 +1079,7 @@ try {
     console.log(JSON.stringify(await request("stop")));
   else
     console.log(
-      "Commands: preflight, backup --destination NEW_DIRECTORY, backup-verify --destination DIRECTORY, capacity [--policy JSON], history-export --target ID --kind events|attempts|messages|handoffs|integrations [--after CURSOR --limit 50], integration-record --target LEAD --input-file JSON, integration-history --target ID [--after CURSOR --limit 50], diagnose (read-only), handoff-record --target ID --input-file JSON, handoff-preview --target LEAD_ID --id HANDOFF_ID, task-history --target ID [--after CURSOR --limit 50], init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, scope-replace --target ID --key KEY --generation N --task TEXT, command-review --target ID --call-id ID --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
+      "Commands: environment [--tools JSON_FILE] (read-only), preflight, backup --destination NEW_DIRECTORY, backup-verify --destination DIRECTORY, capacity [--policy JSON], history-export --target ID --kind events|attempts|messages|handoffs|integrations [--after CURSOR --limit 50], integration-record --target LEAD --input-file JSON, integration-history --target ID [--after CURSOR --limit 50], diagnose (read-only), handoff-record --target ID --input-file JSON, handoff-preview --target LEAD_ID --id HANDOFF_ID, task-history --target ID [--after CURSOR --limit 50], init [--workspace CLEAN_GIT_REPO --test-commands JSON | --workspace-config JSON] [--config-from TOML --provider-env NAME [--keychain-service SERVICE] --executable PATH], start, serve, root --task TEXT [--mode interactive|batch] [--token-alert-at N --token-alert-every N --token-alert-metric total|uncachedInput|output] [--max-total-turns N|unlimited], tree, view --target ID, wait --target ID --after CURSOR [--timeout-ms 25000], task-create --target ID --key KEY --subject TEXT --description TEXT, task-list --target ID, task-get --target ID --task-id TASK, task-update --target ID --task-id TASK --key KEY --revision N --action ACTION [--result TEXT|--owner-id ID|null], status --target ID, send|steer --target ID --message TEXT [--key KEY] [--delivery auto|queue|steer], token-reminder --target ID [--scope agent|tree] --threshold N [--every N --metric total|uncachedInput|output] [--disable], interaction --target ID --input-file POLICY.json, check-in --target ID, guidance-resolve --target ID --message-id ID --outcome delivered|retry-next --reason TEXT, scope-replace --target ID --key KEY --generation N --task TEXT, command-review --target ID --call-id ID --reason TEXT, control --target ID --action pause|resume|cancel|terminate [--immediate], limits --target ID [--max-agents N] --max-total-turns N|unlimited --max-turns N|unlimited --reason TEXT [--offline], native-history --target ID, release-quarantine --target ID --reason TEXT, settle-usage --attempt ID --tokens N --reason TEXT, stop. Task writes accept --input-file JSON. All accept --state DIR.",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Command failed");

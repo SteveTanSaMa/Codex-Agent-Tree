@@ -148,6 +148,10 @@ export class Coordinator {
   private completionRecovery = new Set<string>();
   private ready = false;
   private stopping = false;
+  private stopInProgress: Promise<void> | undefined;
+  private stopBarriers: Promise<
+    { ok: true } | { ok: false; error: unknown }
+  >[] = [];
   private waitStop = new AbortController();
   private jobs = new Set<Promise<void>>();
   private errors: { code: string; message: string }[] = [];
@@ -887,6 +891,9 @@ export class Coordinator {
           "git_diff",
           "run_test",
           "terminal",
+          "terminal_start",
+          "terminal_status",
+          "terminal_stop",
         ].includes(tool)
       ) {
         requireCondition(
@@ -920,13 +927,81 @@ export class Coordinator {
           "FORBIDDEN",
           "Workspace tool is not granted at this level",
         );
-        if (["terminal", "run_test"].includes(tool))
-          this.workspace.validateCommand(agent, tool, p.arguments);
+        if (["terminal", "run_test", "terminal_start"].includes(tool))
+          this.workspace.validateCommand(
+            agent,
+            tool === "terminal_start" ? "terminal" : tool,
+            p.arguments,
+          );
         const callId = protocolString(p.callId);
-        const command = ["run_test", "terminal"].includes(tool)
-          ? this.store.beginWorkspaceCommand(actor, callId, p.arguments)
+        const command = ["run_test", "terminal", "terminal_start"].includes(
+          tool,
+        )
+          ? this.store.beginWorkspaceCommand(
+              actor,
+              callId,
+              tool === "terminal_start"
+                ? { tool, arguments: p.arguments }
+                : p.arguments,
+              tool === "terminal_start",
+            )
           : undefined;
-        if (command?.cached) output = command.result;
+        if (tool === "terminal_status" || tool === "terminal_stop") {
+          const args = record(p.arguments);
+          requireCondition(
+            Object.keys(args).every(
+              (k) => k === "commandId" || k === "repositoryId",
+            ),
+            "INVALID_INPUT",
+            "Unknown command argument",
+          );
+          const commandId = text(args.commandId, "command ID", 256);
+          const receipt = this.store.workspaceCommand(agent.id, commandId);
+          const running = this.workspace.backgroundCommandRunning(
+            agent.id,
+            commandId,
+          );
+          if (tool === "terminal_stop") {
+            requireCondition(
+              receipt.state === "accepted" && running,
+              "STATE_BLOCKED",
+              "Command is not running under this coordinator; inspect its receipt and do not replay unknown work",
+            );
+            this.workspace.stopBackgroundCommand(agent.id, commandId);
+          }
+          output = {
+            commandId,
+            state:
+              receipt.state === "accepted"
+                ? running
+                  ? "running"
+                  : "unknown"
+                : receipt.state,
+            result: receipt.result,
+            ...(tool === "terminal_stop" ? { stopRequested: true } : {}),
+          };
+        } else if (tool === "terminal_start") {
+          if (command?.cached)
+            output = {
+              commandId: callId,
+              state: "completed",
+              result: command.result,
+            };
+          else {
+            // Persist acceptance before dispatch, and keep the promise in the
+            // coordinator's shutdown drain. Failures leave the receipt unknown.
+            const work = this.workspace.call(agent, "terminal", p.arguments, {
+              commandId: callId,
+              timeoutMs: 600000,
+            });
+            this.background(
+              work.then((result) => {
+                this.store.finishWorkspaceCommand(agent.id, callId, result);
+              }),
+            );
+            output = { commandId: callId, state: "running", timeoutMs: 600000 };
+          }
+        } else if (command?.cached) output = command.result;
         else {
           output = await this.workspace.call(agent, tool, p.arguments);
           if (["run_test", "terminal"].includes(tool))
@@ -1632,26 +1707,55 @@ export class Coordinator {
       () => ({ ok: true as const }),
       (error) => ({ ok: false as const, error: error as unknown }),
     );
+    if (releaseOutcome && (!this.stopping || this.stopInProgress))
+      this.stopBarriers.push(releaseOutcome);
     if (this.stopping) {
-      const result = await releaseOutcome;
-      if (result && !result.ok) throw result.error;
+      // Concurrent callers must not observe shutdown as complete while another
+      // caller still owns the database or is draining accepted work.
+      const [shutdown, result] = await Promise.allSettled([
+        this.stopInProgress,
+        releaseOutcome,
+      ]);
+      if (shutdown.status === "rejected") throw shutdown.reason;
+      if (result.status === "rejected") throw result.reason;
+      const barrier = result.value;
+      if (barrier && !barrier.ok) throw barrier.error;
       return;
     }
     this.stopping = true;
-    if (this.guardTimer) clearInterval(this.guardTimer);
-    this.waitStop.abort();
-    this.ready = false;
-    this.runtime.disconnect();
-    // No new dispatch; in-flight RPCs are bounded. A detached native daemon keeps existing Turns.
-    const deadline = Date.now() + 35000;
-    while ((this.ticking || this.jobs.size > 0) && Date.now() < deadline)
-      await new Promise<void>((r) => setTimeout(r, 20));
-    this.runtime.disconnect();
+    const cleanup = async () => {
+      if (this.guardTimer) clearInterval(this.guardTimer);
+      this.waitStop.abort();
+      this.ready = false;
+      this.runtime.disconnect();
+      // No new dispatch; in-flight RPCs are bounded. A detached native daemon keeps existing Turns.
+      const deadline = Date.now() + 35000;
+      while ((this.ticking || this.jobs.size > 0) && Date.now() < deadline)
+        await new Promise<void>((r) => setTimeout(r, 20));
+      this.runtime.disconnect();
+      try {
+        let seen = 0;
+        let failure: { error: unknown } | undefined;
+        // Calls made while stopping may add channel cleanup barriers. Hold the
+        // owner until all registered barriers settle, including rejected ones.
+        do {
+          const batch = this.stopBarriers.slice(seen);
+          seen = this.stopBarriers.length;
+          for (const result of await Promise.all(batch))
+            if (!result.ok && !failure) failure = result;
+        } while (seen < this.stopBarriers.length);
+        if (failure) throw failure.error;
+      } finally {
+        this.stopBarriers = [];
+        this.store.close();
+      }
+    };
+    const pending = cleanup();
+    this.stopInProgress = pending;
     try {
-      const result = await releaseOutcome;
-      if (result && !result.ok) throw result.error;
+      await pending;
     } finally {
-      this.store.close();
+      this.stopInProgress = undefined;
     }
   }
 }
