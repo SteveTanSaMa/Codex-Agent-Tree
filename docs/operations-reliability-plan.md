@@ -27,3 +27,9 @@ When an idle Lead's still-running background command was cancelled by scope repl
 空闲 Lead 的后台命令在任务替换时被取消后，原实现可能在收据结算后仍停留于 `draining`。现在完成收据持久写入后，Coordinator 会重新检查并推进受阻的任务替换；普通后台命令完成仍不会唤醒空闲 Lead，未能结算的结果保持未知且不自动重放。回归使用模拟 Runtime 和真实沙箱命令，不代表真实模型资格验证。
 
 On 2026-11-02, the full default and fault suites, type and format checks passed. A separate short real Codex CLI/model test verified background start and completed status; it did not exercise scope replacement with a real model. / 2026-11-02 默认回归、故障注入、类型和格式检查通过。另一次真实 Codex CLI／模型短测验证了后台启动和完成状态；真实模型下的任务替换竞态未在本轮验证。
+
+## Protection while a command runs / 命令运行期间的保护
+
+An idle Lead's live background command now counts as work for autonomy warnings and optional time-budget pauses. An unresolved receipt without a live local command remains unknown rather than being treated as a running process. Regression tests use a controlled Runtime, real local sandbox commands and simulated time to cover warnings, pause/cancellation, completion and retained uncertainty; they are not real-model qualification.
+
+空闲 Lead 的后台命令实际运行时，现在计入活跃工作，以触发自主提醒及可选时间预算暂停。没有本地活进程的未结算收据仍视为未知，而不被误判为正在运行。回归使用模拟 Runtime、真实本地沙箱命令和模拟时间，覆盖提醒、暂停取消、正常完成及保留未知结果，不代表真实模型资格验证。

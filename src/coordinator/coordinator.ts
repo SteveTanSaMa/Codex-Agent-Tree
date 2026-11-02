@@ -413,6 +413,10 @@ export class Coordinator {
                   t.state,
                 ),
               ) ||
+            // A Lead's Turn can finish while its sandboxed background command
+            // keeps running. Only a live local owner is work: an accepted
+            // receipt left after a crash is uncertain, not an active process.
+            (this.workspace?.commandRunning(a.id) ?? false) ||
             this.store.pendingMessages(a.id).length > 0,
         );
         const decision = this.store.interaction.evaluate(

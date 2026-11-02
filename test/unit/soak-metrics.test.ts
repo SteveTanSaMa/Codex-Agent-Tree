@@ -36,10 +36,14 @@ test("soak size sampling tolerates disappearing temporary entries and does not f
     assert.equal(value, 3);
     assert.equal(deleted, true);
     assert.equal(treeBytes(join(root, "missing")), 0);
-    if (process.platform !== "win32") {
-      symlinkSync(root, join(root, "loop"));
-      assert.equal(treeBytes(root), 3);
-    }
+    // Windows directory junctions are available without symlink privileges and
+    // must be skipped just like POSIX symlinks, including a link to an ancestor.
+    symlinkSync(
+      root,
+      join(root, "loop"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.equal(treeBytes(root), 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

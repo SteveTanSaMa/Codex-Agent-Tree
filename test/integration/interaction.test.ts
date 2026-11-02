@@ -1,8 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { Coordinator } from "../../src/coordinator/coordinator.ts";
+import { workspacePolicy } from "../../src/workspace/broker.ts";
 import { ControlledRuntime } from "../fixtures/controlled-runtime.ts";
 import { RpcFailure } from "../../src/runtime/codex/vendor/jsonrpc-client.ts";
 import {
@@ -297,6 +305,173 @@ test("soft task token budget pauses in-flight work without manufacturing complet
     assert.equal(f.coordinator.store.agent(f.root.id).desired, "paused");
     assert.equal(f.runtime.interrupts.length, 1);
     assert.equal(f.coordinator.store.attempt(a.id).state, "running");
+  } finally {
+    await f.close();
+  }
+});
+
+async function liveBackgroundFixture(policy: Record<string, unknown>) {
+  const dir = mkdtempSync("/tmp/cat-background-guard-");
+  const repo = join(dir, "repo");
+  mkdirSync(repo);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
+  git("init");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(repo, "fixture"), "base");
+  git("add", ".");
+  git("commit", "-m", "fixture");
+  const runtime = new ControlledRuntime();
+  const coordinator = new Coordinator(
+    {
+      stateDirectory: join(dir, "state"),
+      runtimeHome: join(dir, "runtime"),
+      workspace: workspacePolicy(repo),
+    },
+    runtime,
+  );
+  const wait = async (condition: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!condition() && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(condition(), "background guard fixture did not settle");
+  };
+  try {
+    await coordinator.start();
+    const settings = rootSettings(policy);
+    const root = coordinator.createRoot(
+      "Lead",
+      "background work",
+      settings.limits,
+      "guard-root",
+      settings.policy,
+    );
+    await wait(
+      () =>
+        runtime.starts.length === 1 &&
+        !!coordinator.store.attempts(root.id)[0]?.turn_id,
+    );
+    const turn = runtime.starts[0]!;
+    const command = `'${process.execPath}' -e 'const fs=require("node:fs");fs.writeFileSync("started","yes");setInterval(()=>{if(fs.existsSync("finish"))process.exit(0)},10)'`;
+    runtime.onRequest({
+      id: "background-request",
+      method: "item/tool/call",
+      connectionGeneration: 1,
+      params: {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        callId: "background-command",
+        tool: "terminal_start",
+        arguments: { command },
+      },
+    });
+    await wait(
+      () => runtime.responses.length > 0 && existsSync(join(repo, "started")),
+    );
+    assert.equal((runtime.responses[0] as { success: boolean }).success, true);
+    return {
+      dir,
+      repo,
+      coordinator,
+      runtime,
+      root,
+      turn,
+      wait,
+      async close() {
+        await coordinator.stop();
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await coordinator.stop();
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+for (const [name, pausePolicy] of [
+  ["task-time budget", { taskTimeBudgetMs: 10000 }],
+  ["continuous autonomy", { autonomyPauseMs: 10000 }],
+] as const)
+  test(`live background command retains warnings and ${name} pause after its Turn ends`, async () => {
+    const f = await liveBackgroundFixture({
+      autonomyWarnMs: 50,
+      stallWarnMs: 50,
+      ...pausePolicy,
+    });
+    try {
+      f.runtime.complete();
+      await f.wait(
+        () => f.coordinator.store.attempts(f.root.id)[0]?.state === "completed",
+      );
+      const now = Date.now();
+      await f.coordinator.checkProtections(now + 1000);
+      const warnings = f.coordinator.store.interaction.summary(
+        f.root.id,
+      ).warnings;
+      assert.ok(warnings.some((w) => w.reason === "autonomy-duration"));
+      assert.ok(warnings.some((w) => w.reason === "no-observable-progress"));
+      assert.equal(f.coordinator.store.agent(f.root.id).desired, "active");
+      await f.coordinator.checkProtections(now + 20000);
+      assert.equal(f.coordinator.store.agent(f.root.id).desired, "paused");
+      await f.wait(
+        () =>
+          f.coordinator.store.workspaceCommand(f.root.id, "background-command")
+            .state === "completed",
+      );
+      const receipt = f.coordinator.store.workspaceCommand(
+        f.root.id,
+        "background-command",
+      );
+      assert.equal(
+        (receipt.result as { stopped: string }).stopped,
+        "cancelled",
+      );
+      assert.equal(f.runtime.starts.length, 1);
+    } finally {
+      await f.close();
+    }
+  });
+
+test("finished background work ends its epoch; unknown receipts alone are not live processes", async () => {
+  const f = await liveBackgroundFixture({ taskTimeBudgetMs: 10000 });
+  try {
+    const actor = f.coordinator.store.authenticate(
+      f.turn.threadId,
+      f.turn.turnId,
+      1,
+    );
+    f.coordinator.store.beginWorkspaceCommand(actor, "uncertain-after-crash", {
+      command: "effect",
+    });
+    f.runtime.complete();
+    await f.wait(
+      () => f.coordinator.store.attempts(f.root.id)[0]?.state === "completed",
+    );
+    await f.coordinator.checkProtections(Date.now() + 1000);
+    assert.notEqual(
+      f.coordinator.store.interaction.summary(f.root.id).clocks?.epoch_ms,
+      null,
+    );
+    writeFileSync(join(f.repo, "finish"), "finish");
+    await f.wait(
+      () =>
+        f.coordinator.store.workspaceCommand(f.root.id, "background-command")
+          .state === "completed",
+    );
+    await f.coordinator.checkProtections(Date.now() + 20000);
+    assert.equal(f.coordinator.store.agent(f.root.id).desired, "active");
+    assert.equal(
+      f.coordinator.store.interaction.summary(f.root.id).clocks?.epoch_ms,
+      null,
+    );
+    assert.equal(
+      f.coordinator.store.workspaceCommand(f.root.id, "uncertain-after-crash")
+        .state,
+      "accepted",
+    );
+    assert.equal(f.runtime.starts.length, 1);
   } finally {
     await f.close();
   }

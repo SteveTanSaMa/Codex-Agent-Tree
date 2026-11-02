@@ -1,4 +1,5 @@
 import { readdirSync, lstatSync } from "node:fs";
+import { join } from "node:path";
 // Runtime-owned temp trees may disappear during a sample. Ignore only ENOENT;
 // permission, I/O and other failures still stop the test. Never follow symlinks.
 export function treeBytes(
@@ -14,7 +15,7 @@ export function treeBytes(
   }
   let bytes = 0;
   for (const entry of entries) {
-    const path = dir + "/" + entry;
+    const path = join(dir, entry);
     let stat;
     try {
       stat = io.lstat(path);
