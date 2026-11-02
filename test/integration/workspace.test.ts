@@ -944,6 +944,112 @@ test("background terminal returns promptly, locks the workspace, records the out
   }
 });
 
+test("scope replacement advances after an idle Lead's background command settles", async () => {
+  const f = fixture(),
+    runtime = new ControlledRuntime();
+  const c = new Coordinator(
+    {
+      stateDirectory: join(f.dir, "scope-async-state"),
+      runtimeHome: join(f.dir, "scope-async-home"),
+      workspace: f.policy,
+    },
+    runtime,
+  );
+  const wait = async (p: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!p() && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(p(), "timed out waiting for condition");
+  };
+  try {
+    await c.start();
+    const root = c.createRoot("Lead", "old task", {
+      tokenPolicy: "observe",
+      tokens: 1000,
+      maxDepth: 0,
+      maxAgents: 1,
+      maxConcurrentTurns: 1,
+      maxTurnsPerAgent: 3,
+      turnReservation: 100,
+    });
+    await wait(
+      () => runtime.starts.length === 1 && !!c.store.attempts()[0]?.turn_id,
+    );
+    const turn = runtime.starts[0]!;
+    runtime.onRequest({
+      id: "start",
+      method: "item/tool/call",
+      connectionGeneration: 1,
+      params: {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        callId: "old-background",
+        tool: "terminal_start",
+        arguments: {
+          command: `'${process.execPath}' -e 'require("node:fs").writeFileSync("running.txt","yes");setInterval(()=>{},1000)'`,
+        },
+      },
+    });
+    await wait(
+      () =>
+        runtime.responses.length === 1 &&
+        existsSync(join(f.repo, "running.txt")),
+    );
+    assert.equal((runtime.responses[0] as { success: boolean }).success, true);
+    runtime.complete(0);
+    await wait(() => c.store.attempts()[0]?.state === "completed");
+    const internal = c as unknown as {
+      jobs: Set<Promise<void>>;
+      ticking: boolean;
+    };
+    // Only the still-running background command remains tracked.
+    await wait(() => internal.jobs.size === 1 && !internal.ticking);
+    const broker = c.workspace!;
+    const cancel = broker.cancel.bind(broker);
+    let cancellationRequested = false;
+    broker.cancel = (agentId?: string) => {
+      cancellationRequested = true;
+      // Hold the process open until every replacement-side advance has run.
+      void agentId;
+    };
+    let advances = 0;
+    const advance = c.store.scopes.advance.bind(c.store.scopes);
+    c.store.scopes.advance = () => {
+      advances++;
+      advance();
+    };
+    const replacement = await c.replaceScope(root.id, "replace", 0, "new task");
+    assert.equal(replacement.state, "draining");
+    assert.equal(cancellationRequested, true);
+    await wait(
+      () => advances >= 3 && internal.jobs.size === 1 && !internal.ticking,
+    );
+    assert.equal(
+      c.store.workspaceCommand(root.id, "old-background").state,
+      "accepted",
+    );
+    cancel(root.id);
+    await wait(
+      () =>
+        c.store.workspaceCommand(root.id, "old-background").state ===
+        "completed",
+    );
+    await wait(
+      () => c.store.scopes.progress(replacement.receipt.id).state === "ready",
+    );
+    await wait(() => runtime.starts.length === 2);
+    assert.match(runtime.starts[1]!.input, /new task/);
+    assert.equal(
+      runtime.starts.length,
+      2,
+      "replacement must dispatch only once",
+    );
+  } finally {
+    await c.stop();
+    f.close();
+  }
+});
+
 test("background command cannot begin while an older receipt remains unresolved", () => {
   const f = fixture();
   try {

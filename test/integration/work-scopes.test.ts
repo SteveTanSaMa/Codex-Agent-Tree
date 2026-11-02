@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { Store, type Agent } from "../../src/storage/store.ts";
 import { rootSettings } from "../../src/storage/interaction.ts";
 import { Coordinator } from "../../src/coordinator/coordinator.ts";
 import { ControlledRuntime } from "../fixtures/controlled-runtime.ts";
+import { workspacePolicy } from "../../src/workspace/broker.ts";
 
 async function until(check: () => boolean) {
   const end = Date.now() + 3000;
@@ -563,5 +565,222 @@ test("retrying a ready replacement does not cancel newer-scope host commands", a
   } finally {
     await c.stop();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function backgroundScopeFixture() {
+  const dir = mkdtempSync("/tmp/cat-scope-background-boundary-");
+  const repo = join(dir, "repo");
+  mkdirSync(repo);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
+  git("init");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(repo, "fixture.txt"), "baseline");
+  git("add", "fixture.txt");
+  git("commit", "-m", "fixture");
+  const runtime = new ControlledRuntime();
+  const c = new Coordinator(
+    {
+      stateDirectory: join(dir, "state"),
+      runtimeHome: join(dir, "runtime"),
+      workspace: workspacePolicy(repo),
+    },
+    runtime,
+  );
+  let complete!: (result: { exitCode: number; stopped: boolean }) => void;
+  const work = new Promise<{ exitCode: number; stopped: boolean }>(
+    (resolve) => {
+      complete = resolve;
+    },
+  );
+  const broker = c.workspace!;
+  // No shell or model is executed: the deferred host result models the exact
+  // boundary after acceptance and before the durable command receipt.
+  Object.defineProperty(broker, "call", { value: () => work });
+  Object.defineProperty(broker, "cancel", { value: () => {} });
+  await c.start();
+  const root = c.createRoot("Lead", "old work", rootSettings({}).limits);
+  await until(
+    () =>
+      runtime.starts.length === 1 && !!c.store.attempts(root.id)[0]?.turn_id,
+  );
+  const turn = runtime.starts[0]!;
+  const actor = c.store.authenticate(turn.threadId, turn.turnId, 1);
+  runtime.onRequest({
+    id: "background-start",
+    method: "item/tool/call",
+    connectionGeneration: 1,
+    params: {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      callId: "background",
+      tool: "terminal_start",
+      arguments: { command: "true" },
+    },
+  });
+  await until(() => runtime.responses.length === 1);
+  assert.equal((runtime.responses[0] as { success: boolean }).success, true);
+  assert.equal(
+    c.store.workspaceCommand(root.id, "background").state,
+    "accepted",
+  );
+  return {
+    dir,
+    c,
+    runtime,
+    root,
+    actor,
+    complete,
+    async close() {
+      complete({ exitCode: 0, stopped: true });
+      await c.stop();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("background settlement advances replacement but preserves a human pause fence", async () => {
+  const f = await backgroundScopeFixture();
+  try {
+    f.runtime.complete(0);
+    await until(() => f.c.store.attempts(f.root.id)[0]?.state === "completed");
+    await f.c.control(f.root.id, "pause");
+    const replacement = await f.c.replaceScope(
+      f.root.id,
+      "replace-paused",
+      0,
+      "new work",
+    );
+    assert.equal(replacement.state, "draining");
+    f.complete({ exitCode: 0, stopped: true });
+    await until(
+      () => f.c.store.scopes.progress(replacement.receipt.id).state === "ready",
+    );
+    assert.equal(f.c.store.agent(f.root.id).desired, "paused");
+    assert.equal(f.runtime.starts.length, 1);
+    await f.c.control(f.root.id, "resume");
+    await until(() => f.runtime.starts.length === 2);
+    assert.match(f.runtime.starts[1]!.input, /new work/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a failed background command receipt keeps the replacement draining", async () => {
+  const f = await backgroundScopeFixture();
+  try {
+    f.runtime.complete(0);
+    await until(() => f.c.store.attempts(f.root.id)[0]?.state === "completed");
+    const replacement = await f.c.replaceScope(
+      f.root.id,
+      "replace-failed",
+      0,
+      "new work",
+    );
+    assert.equal(replacement.state, "draining");
+    f.c.store.finishWorkspaceCommand = () => {
+      throw new Error("injected durable receipt failure");
+    };
+    f.complete({ exitCode: 0, stopped: true });
+    await until(() => f.c.diagnostics().errors.length > 0);
+    assert.equal(
+      f.c.store.workspaceCommand(f.root.id, "background").state,
+      "accepted",
+    );
+    assert.equal(
+      f.c.store.scopes.progress(replacement.receipt.id).state,
+      "draining",
+    );
+    assert.equal(f.runtime.starts.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("another unknown subtree command still fences replacement after background settlement", async () => {
+  const f = await backgroundScopeFixture();
+  try {
+    const child = f.c.store.spawn(f.actor, "child", {
+      name: "Child",
+      role: "coder",
+      task: "old",
+    });
+    const b = f.c.store.bind(child.id, "child-thread", "fixture");
+    const t = f.c.store.prepare(child.id, "old");
+    f.c.store.markStarting(t.id);
+    f.c.store.attachTurn(t.id, b.generation, "child-turn");
+    const childActor = f.c.store.authenticate(
+      "child-thread",
+      "child-turn",
+      b.generation,
+    );
+    f.c.store.beginWorkspaceCommand(childActor, "unknown-child-command", {
+      command: "side effect",
+    });
+    f.c.store.finish(t.id, b.generation, "completed", "done");
+    f.runtime.complete(0);
+    await until(() => f.c.store.attempts(f.root.id)[0]?.state === "completed");
+    const replacement = await f.c.replaceScope(
+      f.root.id,
+      "replace-unknown",
+      0,
+      "new work",
+    );
+    assert.equal(replacement.state, "draining");
+    f.complete({ exitCode: 0, stopped: true });
+    await until(
+      () =>
+        f.c.store.workspaceCommand(f.root.id, "background").state ===
+        "completed",
+    );
+    // Await a scheduler turn so that its scope recheck has run.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      f.c.store.workspaceCommand(child.id, "unknown-child-command").state,
+      "accepted",
+    );
+    assert.equal(
+      f.c.store.scopes.progress(replacement.receipt.id).state,
+      "draining",
+    );
+    assert.equal(f.runtime.starts.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("background settlement during shutdown never dispatches replacement work", async () => {
+  const f = await backgroundScopeFixture();
+  try {
+    f.runtime.complete(0);
+    await until(() => f.c.store.attempts(f.root.id)[0]?.state === "completed");
+    const replacement = await f.c.replaceScope(
+      f.root.id,
+      "replace-stop",
+      0,
+      "new work",
+    );
+    assert.equal(replacement.state, "draining");
+    const stopping = f.c.stop();
+    f.complete({ exitCode: 0, stopped: true });
+    await stopping;
+    assert.equal(f.runtime.starts.length, 1);
+    const reopened = new Store(join(f.dir, "state", "business.sqlite"));
+    try {
+      assert.equal(
+        reopened.workspaceCommand(f.root.id, "background").state,
+        "completed",
+      );
+      assert.equal(
+        reopened.scopes.progress(replacement.receipt.id).state,
+        "draining",
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await f.close();
   }
 });

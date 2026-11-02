@@ -995,8 +995,12 @@ export class Coordinator {
               timeoutMs: 600000,
             });
             this.background(
-              work.then((result) => {
+              work.then(async (result) => {
                 this.store.finishWorkspaceCommand(agent.id, callId, result);
+                // A replacement may have inspected the accepted receipt before
+                // cancellation finished. Recheck only after durable settlement;
+                // normal background completion must not wake an idle Lead.
+                if (this.store.scopes.blocked(agent.id)) await this.tick();
               }),
             );
             output = { commandId: callId, state: "running", timeoutMs: 600000 };

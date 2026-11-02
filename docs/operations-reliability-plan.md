@@ -19,3 +19,11 @@ Existing native Threads retain their original tool catalogs; background tools re
 - The selected provider returned the requested model as `deepseek-v4.1-flash-1017` and accepted a minimal Responses request. A real isolated Codex CLI two-Agent report passed, and a separate one-Turn native test observed `terminal_start` and the completed `terminal_status` receipt. These short tests do not establish long-duration stability or exactly-once external effects.
 - 默认单元与集成测试通过（集成 173 通过、18 跳过）；故障注入 49 项通过，包括实际强杀宿主与后台命令未知收据恢复。类型及格式检查通过。
 - 所选提供商返回的实际模型 ID 为 `deepseek-v4.1-flash-1017`，最小 Responses 请求成功。隔离真实 Codex CLI 双 Agent 回报测试通过，另一次单 Turn 原生测试验证 `terminal_start` 和完成后的 `terminal_status`。这些短测不证明长期稳定性或外部副作用严格执行一次。
+
+## Background command and scope replacement / 后台命令与任务替换
+
+When an idle Lead's still-running background command was cancelled by scope replacement, replacement could remain `draining` after its command receipt settled. After the receipt is durably written, the Coordinator now rechecks and schedules a blocked replacement. Normal background completion does not wake an idle Lead; missing or failed settlement remains unknown and is never automatically replayed. The regression uses a controlled Runtime and an actual sandboxed local command; it is not a real-model qualification.
+
+空闲 Lead 的后台命令在任务替换时被取消后，原实现可能在收据结算后仍停留于 `draining`。现在完成收据持久写入后，Coordinator 会重新检查并推进受阻的任务替换；普通后台命令完成仍不会唤醒空闲 Lead，未能结算的结果保持未知且不自动重放。回归使用模拟 Runtime 和真实沙箱命令，不代表真实模型资格验证。
+
+On 2026-11-02, the full default and fault suites, type and format checks passed. A separate short real Codex CLI/model test verified background start and completed status; it did not exercise scope replacement with a real model. / 2026-11-02 默认回归、故障注入、类型和格式检查通过。另一次真实 Codex CLI／模型短测验证了后台启动和完成状态；真实模型下的任务替换竞态未在本轮验证。
