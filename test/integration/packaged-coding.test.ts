@@ -2,7 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 const execute = promisify(execFile);
@@ -18,6 +26,31 @@ test("fresh Skill ZIP contains its sandbox supervisor and runs coding tools outs
       join(process.cwd(), "dist", `codex-agent-tree-${version}.zip`),
       dir,
     ]);
+    const packagedDocs = join(
+      dir,
+      "codex-agent-tree/docs/environment-diagnosis.md",
+    );
+    assert.ok(existsSync(packagedDocs), "environment documentation missing");
+    assert.match(readFileSync(packagedDocs, "utf8"), /environment --state/);
+    const state = join(dir, "preflight-state");
+    mkdirSync(state);
+    writeFileSync(join(state, "config.json"), "{}");
+    // The offline fixture supplies the same locked production dependency that
+    // the documented setup installs before invoking the packaged CLI.
+    cpSync(
+      join(process.cwd(), "node_modules/ws"),
+      join(dir, "codex-agent-tree/node_modules/ws"),
+      { recursive: true },
+    );
+    const environment = await execute(process.execPath, [
+      join(dir, "codex-agent-tree/scripts/cat.mjs"),
+      "environment",
+      "--state",
+      state,
+    ]);
+    const report = JSON.parse(environment.stdout);
+    assert.equal(report.readOnly, true);
+    assert.equal(report.commandPolicy.leadBackgroundTerminalTimeoutMs, 600000);
     const module = pathToFileURL(
       join(dir, "codex-agent-tree/src/workspace/broker.ts"),
     ).href;
